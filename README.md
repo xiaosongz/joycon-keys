@@ -15,17 +15,18 @@ Built for driving voice dictation and Claude Code option menus from the couch.
 | B                      | Escape      | Cancel / interrupt             |
 | X                      | `1`         | Pick option 1 directly         |
 | Y                      | `2`         | Pick option 2 directly         |
-| Shoulders (R/ZR/SL/SR) | Fn+Space    | Dictation toggle               |
+| SL / SR (single) or ZL / ZR (paired) | Fn+Space | Dictation toggle    |
 | Home                   | Fn+Space    | Dictation toggle (backup)      |
 | Plus / Minus           | Shift+Tab   | Claude Code mode switch        |
 
-A single Joy-Con exposes no stick-click or extendedGamepad profile on macOS —
-elements arrive via `physicalInputProfile` (A/B/X/Y, Home, Menu, the stick as
-an analog Direction Pad, and only TWO shoulder elements for the four physical
-shoulder buttons R/ZR/SL/SR — both are bound to dictation until debug output
-identifies which physical key maps to which element).
+Shoulder-button reality on macOS (confirmed by
+[SDL issue #6095](https://github.com/libsdl-org/SDL/issues/6095)): a single
+Joy-Con reports only SL/SR (as Left/Right Shoulder) — R and ZR are never
+reported at all. A combined pair reports R/ZR (shoulder/trigger) and loses
+SL/SR. The two modes are symmetric and mutually exclusive; this tool binds
+shoulders *and* triggers so dictation works in either mode.
 Run with `JOYKEYS_DEBUG=1` to print every element event — useful for checking
-stick axis orientation and shoulder identity before remapping.
+stick axis orientation before remapping.
 
 Edit the `pad.valueChangedHandler` block in `main.swift` to change bindings —
 key codes are Carbon virtual key codes, listed at the top of the file.
