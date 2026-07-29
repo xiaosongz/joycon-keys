@@ -117,6 +117,8 @@ func wire(_ controller: GCController) {
 
 // MARK: - Main
 
+setvbuf(stdout, nil, _IOLBF, 0)  // line-buffered even when piped (launchd logs)
+
 let trusted = AXIsProcessTrustedWithOptions(
     [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
 if !trusted {
