@@ -30,6 +30,7 @@ let KEY_DOWN: CGKeyCode = 125
 let KEY_UP: CGKeyCode = 126
 let KEY_1: CGKeyCode = 18
 let KEY_2: CGKeyCode = 19
+let KEY_SPACE: CGKeyCode = 49
 
 // MARK: - Key synthesis
 
@@ -113,7 +114,12 @@ func wire(_ controller: GCController) {
     bind(profile.buttons[GCInputButtonB], "B", KEY_ESCAPE)
     bind(profile.buttons[GCInputButtonX], "X", KEY_1)
     bind(profile.buttons[GCInputButtonY], "Y", KEY_2)
-    bind(profile.buttons[GCInputButtonHome], "Home", KEY_F5)
+    // Dictation = Fn+Space (macOS dictation shortcut). A lone Joy-Con exposes
+    // only two shoulder elements for four physical buttons (R/ZR/SL/SR) —
+    // bind both until JOYKEYS_DEBUG identifies which physical key is which.
+    bind(profile.buttons[GCInputLeftShoulder], "LeftShoulder", KEY_SPACE, .maskSecondaryFn)
+    bind(profile.buttons[GCInputRightShoulder], "RightShoulder", KEY_SPACE, .maskSecondaryFn)
+    bind(profile.buttons[GCInputButtonHome], "Home", KEY_SPACE, .maskSecondaryFn)
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
 
