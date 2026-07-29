@@ -39,22 +39,33 @@ swiftc -O main.swift -o joycon-keys
 
 Only Command Line Tools required, no Xcode.
 
-## Run
+## Install (launchd, auto-start)
 
 ```sh
-./joycon-keys
+swiftc -O main.swift -o joycon-keys
+cp joycon-keys ~/bin/joycon-keys       # MUST be a local-disk path, see below
+cp com.xiaosong.joycon-keys.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist
 ```
 
-1. Pair the Joy-Con in System Settings > Bluetooth (hold the small sync button
-   on the rail until the LEDs sweep).
-2. Grant **Accessibility** permission when prompted
-   (System Settings > Privacy & Security > Accessibility). The permission
-   attaches to the *responsible process* — the terminal app you launch from
-   (e.g. Ghostty). If you switch terminals, grant again.
-3. Dictation: System Settings > Keyboard > Dictation > shortcut = **F5**.
+Gotchas learned the hard way:
 
-Without Accessibility permission the tool runs but key events are silently
-dropped — that is the number-one "nothing happens" cause.
+- **launchd refuses to exec from an external volume** (exit 78 EX_CONFIG).
+  This repo lives under `~/git` → symlink to `/Volumes/970EVO` — that path
+  cannot be the `ProgramArguments` target. Hence the copy to `~/bin`.
+- **TCC identity**: a launchd-spawned process is its own responsible process.
+  Terminal grants do NOT carry over — `joycon-keys` itself must be enabled in
+  System Settings > Privacy & Security > Accessibility. Because the binary is
+  ad-hoc signed, **every rebuild changes its code hash and the grant must be
+  re-toggled** (and the binary re-copied to ~/bin).
+- Logs: `~/Library/Logs/joycon-keys.log`. Restart after permission changes:
+  `launchctl kickstart -k gui/$(id -u)/com.xiaosong.joycon-keys`.
+
+Without Accessibility permission the tool runs and wires the Joy-Con but key
+events are silently dropped — that is the number-one "nothing happens" cause.
+
+Dictation is triggered by synthesizing the shortcut this machine actually
+registers — "press Control twice" (symbolic hotkey 164) — not a key combo.
 
 ## Notes
 

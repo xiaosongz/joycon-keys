@@ -30,7 +30,7 @@ let KEY_DOWN: CGKeyCode = 125
 let KEY_UP: CGKeyCode = 126
 let KEY_1: CGKeyCode = 18
 let KEY_2: CGKeyCode = 19
-let KEY_SPACE: CGKeyCode = 49
+let KEY_CONTROL: CGKeyCode = 59
 
 // MARK: - Key synthesis
 
@@ -40,6 +40,23 @@ func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
         guard let ev = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: down) else { continue }
         ev.flags = flags
         ev.post(tap: .cghidEventTap)
+    }
+}
+
+// Dictation shortcut on this machine = "press Control twice" (symbolic
+// hotkey 164, type=modifier, mask 262144). Verified: synthetic double-tap
+// triggers it; Fn+Space does not (that shortcut is not registered).
+func postDictationToggle() {
+    let src = CGEventSource(stateID: .hidSystemState)
+    for tap in 0..<2 {
+        if tap > 0 { usleep(120_000) }
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: KEY_CONTROL, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: KEY_CONTROL, keyDown: false) else { continue }
+        down.flags = .maskControl
+        up.flags = []
+        down.post(tap: .cghidEventTap)
+        usleep(40_000)
+        up.post(tap: .cghidEventTap)
     }
 }
 
@@ -98,6 +115,13 @@ func bind(_ button: GCControllerButtonInput?, _ label: String,
     }
 }
 
+func bindDictation(_ button: GCControllerButtonInput?, _ label: String) {
+    button?.pressedChangedHandler = { _, _, pressed in
+        if debug { print("[debug] \(label) pressed=\(pressed)") }
+        if pressed { postDictationToggle() }
+    }
+}
+
 func bindVertical(_ dpad: GCControllerDirectionPad?, _ label: String) {
     dpad?.valueChangedHandler = { _, x, y in
         if debug { print("[debug] \(label) x=\(x) y=\(y)") }
@@ -114,16 +138,14 @@ func wire(_ controller: GCController) {
     bind(profile.buttons[GCInputButtonB], "B", KEY_ESCAPE)
     bind(profile.buttons[GCInputButtonX], "X", KEY_1)
     bind(profile.buttons[GCInputButtonY], "Y", KEY_2)
-    // Dictation = Fn+Space (macOS dictation shortcut). A lone Joy-Con exposes
-    // only two shoulder elements for four physical buttons (R/ZR/SL/SR) —
-    // bind both until JOYKEYS_DEBUG identifies which physical key is which.
-    bind(profile.buttons[GCInputLeftShoulder], "LeftShoulder", KEY_SPACE, .maskSecondaryFn)
-    bind(profile.buttons[GCInputRightShoulder], "RightShoulder", KEY_SPACE, .maskSecondaryFn)
-    // Triggers exist only when two Joy-Cons are combined (ZL/ZR); a lone
-    // Joy-Con never reports R/ZR at all — see SDL issue #6095.
-    bind(profile.buttons[GCInputLeftTrigger], "LeftTrigger", KEY_SPACE, .maskSecondaryFn)
-    bind(profile.buttons[GCInputRightTrigger], "RightTrigger", KEY_SPACE, .maskSecondaryFn)
-    bind(profile.buttons[GCInputButtonHome], "Home", KEY_SPACE, .maskSecondaryFn)
+    // Single Joy-Con reports only SL/SR (as shoulders); a combined pair
+    // reports ZL/ZR (as triggers) instead — see SDL issue #6095. All of
+    // them, plus Home, toggle dictation.
+    bindDictation(profile.buttons[GCInputLeftShoulder], "LeftShoulder")
+    bindDictation(profile.buttons[GCInputRightShoulder], "RightShoulder")
+    bindDictation(profile.buttons[GCInputLeftTrigger], "LeftTrigger")
+    bindDictation(profile.buttons[GCInputRightTrigger], "RightTrigger")
+    bindDictation(profile.buttons[GCInputButtonHome], "Home")
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
 
