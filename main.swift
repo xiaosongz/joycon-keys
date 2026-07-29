@@ -81,38 +81,45 @@ func handleVertical(_ y: Float) {
 }
 
 // MARK: - Controller wiring
+//
+// A single Joy-Con exposes no extendedGamepad profile on macOS — only
+// physicalInputProfile with: Button A/B/X/Y, Button Home, Button Menu,
+// Direction Pad (the stick, as an analog dpad), Left/Right Shoulder (SL/SR).
+// Binding by element name covers both a single Joy-Con and a combined pair.
 
-func edge(_ pressed: Bool, _ state: inout Bool, _ action: () -> Void) {
-    if pressed && !state { action() }
-    state = pressed
+let debug = ProcessInfo.processInfo.environment["JOYKEYS_DEBUG"] != nil
+
+func bind(_ button: GCControllerButtonInput?, _ label: String,
+          _ key: CGKeyCode, _ flags: CGEventFlags = []) {
+    button?.pressedChangedHandler = { _, _, pressed in
+        if debug { print("[debug] \(label) pressed=\(pressed)") }
+        if pressed { postKey(key, flags: flags) }
+    }
+}
+
+func bindVertical(_ dpad: GCControllerDirectionPad?, _ label: String) {
+    dpad?.valueChangedHandler = { _, x, y in
+        if debug { print("[debug] \(label) x=\(x) y=\(y)") }
+        handleVertical(y)
+    }
 }
 
 func wire(_ controller: GCController) {
     let name = controller.vendorName ?? "unknown controller"
-    guard let pad = controller.extendedGamepad else {
-        let elements = controller.physicalInputProfile.elements.keys.sorted().joined(separator: ", ")
-        print("[joycon-keys] \(name): no extendedGamepad profile; elements: \(elements)")
-        return
-    }
-    print("[joycon-keys] wired: \(name)")
+    let profile = controller.physicalInputProfile
+    print("[joycon-keys] wired: \(name) — elements: \(profile.elements.keys.sorted().joined(separator: ", "))")
 
-    var aState = false, bState = false, xState = false, yState = false
-    var menuState = false, optionsState = false
-    var lClickState = false, rClickState = false
+    bind(profile.buttons[GCInputButtonA], "A", KEY_RETURN)
+    bind(profile.buttons[GCInputButtonB], "B", KEY_ESCAPE)
+    bind(profile.buttons[GCInputButtonX], "X", KEY_1)
+    bind(profile.buttons[GCInputButtonY], "Y", KEY_2)
+    bind(profile.buttons[GCInputButtonHome], "Home", KEY_F5)
+    bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
+    bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
 
-    pad.valueChangedHandler = { pad, _ in
-        handleVertical(pad.leftThumbstick.yAxis.value + pad.rightThumbstick.yAxis.value
-                       + (pad.dpad.up.isPressed ? 1 : 0) - (pad.dpad.down.isPressed ? 1 : 0))
-
-        edge(pad.buttonA.isPressed, &aState) { postKey(KEY_RETURN) }
-        edge(pad.buttonB.isPressed, &bState) { postKey(KEY_ESCAPE) }
-        edge(pad.buttonX.isPressed, &xState) { postKey(KEY_1) }
-        edge(pad.buttonY.isPressed, &yState) { postKey(KEY_2) }
-        edge(pad.buttonMenu.isPressed, &menuState) { postKey(KEY_TAB, flags: .maskShift) }
-        edge(pad.buttonOptions?.isPressed ?? false, &optionsState) { postKey(KEY_TAB, flags: .maskShift) }
-        edge(pad.leftThumbstickButton?.isPressed ?? false, &lClickState) { postKey(KEY_F5) }
-        edge(pad.rightThumbstickButton?.isPressed ?? false, &rClickState) { postKey(KEY_F5) }
-    }
+    bindVertical(profile.dpads[GCInputDirectionPad], "DirectionPad")
+    bindVertical(profile.dpads[GCInputLeftThumbstick], "LeftStick")
+    bindVertical(profile.dpads[GCInputRightThumbstick], "RightStick")
 }
 
 // MARK: - Main
