@@ -119,6 +119,10 @@ func wire(_ controller: GCController) {
     // bind both until JOYKEYS_DEBUG identifies which physical key is which.
     bind(profile.buttons[GCInputLeftShoulder], "LeftShoulder", KEY_SPACE, .maskSecondaryFn)
     bind(profile.buttons[GCInputRightShoulder], "RightShoulder", KEY_SPACE, .maskSecondaryFn)
+    // Triggers exist only when two Joy-Cons are combined (ZL/ZR); a lone
+    // Joy-Con never reports R/ZR at all — see SDL issue #6095.
+    bind(profile.buttons[GCInputLeftTrigger], "LeftTrigger", KEY_SPACE, .maskSecondaryFn)
+    bind(profile.buttons[GCInputRightTrigger], "RightTrigger", KEY_SPACE, .maskSecondaryFn)
     bind(profile.buttons[GCInputButtonHome], "Home", KEY_SPACE, .maskSecondaryFn)
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
