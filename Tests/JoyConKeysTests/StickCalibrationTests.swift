@@ -36,6 +36,14 @@ final class StickCalibrationTests: XCTestCase {
             spi: pack([(1200, 1100), (2000, 2100), (900, 950)]), side: .other))
     }
 
+    /// M-1: a zeroed 9-byte payload (blank/erased flash) decodes to all-zero
+    /// pairs — 0 ranges and a 0 center — which must be rejected rather than
+    /// installed as a usable-looking calibration.
+    func testDecodeRejectsZeroedPayload() {
+        XCTAssertNil(StickCalibration.decode(spi: [UInt8](repeating: 0, count: 9), side: .left))
+        XCTAssertNil(StickCalibration.decode(spi: [UInt8](repeating: 0, count: 9), side: .right))
+    }
+
     func testNormalizeCenterAndExtremes() {
         let cal = StickCalibration(
             centerX: 2000, centerY: 2000,

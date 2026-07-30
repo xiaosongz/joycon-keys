@@ -71,8 +71,14 @@ struct SettingsPane: View {
                         // Prompting is what makes the app appear in the
                         // Input Monitoring list at all; the grant itself
                         // arrives later, handled by the activation refresh.
+                        // IOHIDRequestAccess blocks on the TCC prompt (M-4) —
+                        // off MainActor so the toggle's own commit doesn't
+                        // hang the UI; the return value is already discarded
+                        // and unused here regardless of which queue runs it.
                         if enable && !RawHIDBackend.accessGranted() {
-                            RawHIDBackend.requestAccess()
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                RawHIDBackend.requestAccess()
+                            }
                         }
                         engine.applyBackendPreference()
                     }))

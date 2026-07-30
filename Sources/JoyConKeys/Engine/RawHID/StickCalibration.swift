@@ -27,6 +27,17 @@ struct StickCalibration: Equatable {
         let p0 = pair(0), p1 = pair(3), p2 = pair(6)
         // Same fields, different SPI ordering per side.
         let (above, center, below) = side == .left ? (p0, p1, p2) : (p2, p0, p1)
+        // Plausibility guard (M-1): a zeroed or blank-flash (all-0xFF) block
+        // decodes syntactically fine but is unusable — e.g. a 0 range makes
+        // normalize's max(range,1) clamp every sample to ±1, and a center
+        // pinned at 0 or 4095 does the same from the other side. Either way
+        // the stick latches a permanent digital-repeat. Reject and keep
+        // whatever calibration (.fallback or a prior valid block) is already
+        // installed instead of overwriting it with garbage.
+        guard [above.0, above.1, below.0, below.1].allSatisfy({ $0 != 0 && $0 < 4095 }),
+              center.0 != 0, center.0 != 4095,
+              center.1 != 0, center.1 != 4095
+        else { return nil }
         return StickCalibration(
             centerX: center.0, centerY: center.1,
             rangeXPlus: above.0, rangeYPlus: above.1,

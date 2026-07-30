@@ -95,6 +95,24 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
         handleStick(stick, up: up, right: right)
     }
 
+    /// Runtime permission loss (I-1): the pre-flight IOHIDCheckAccess said
+    /// granted, but an actual device open came back kIOReturnNotPermitted —
+    /// stale TCC state after a rebuild/re-sign is the known repro. This is a
+    /// forced fallback, not a preference re-apply: swap to GCBackend directly
+    /// WITHOUT re-reading useRawHID, so the toggle stays ON (per the design's
+    /// remediation flow — Settings shows the red caption, and granting the
+    /// permission promotes back to raw HID on the next didBecomeActive
+    /// refresh without the user re-toggling).
+    func backendPermissionDenied() {
+        rawHIDDenied = true
+        backend?.stop()
+        clearLiveState()
+        let next: InputBackend = GCBackend()
+        backend = next
+        next.start(delegate: self)
+        NSLog("[joycon-keys] raw HID permission denied at runtime — falling back to GameController")
+    }
+
     /// Stick-to-digital with hysteresis: engage past 0.6, release inside
     /// 0.4; the dominant axis wins so diagonals don't flicker. Only the
     /// stick that engaged a direction may release it — a second stick

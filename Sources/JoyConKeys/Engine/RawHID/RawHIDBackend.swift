@@ -7,8 +7,12 @@ import IOKit.hid
 /// hop to the MainActor delegate.
 final class RawHIDBackend: InputBackend {
     /// Stick-calibration handshake: idle → factory read issued → user read
-    /// issued. Both replies land in handleSubcommandReply.
-    private enum CalStage { case idle, factory, user }
+    /// issued. Both replies land in handleSubcommandReply. `failed` is a
+    /// terminal state for a send that never made it onto the wire (I-2) —
+    /// distinct from `idle` so handleReport's `== .idle` gate (which starts
+    /// the handshake) never re-arms it into a retry storm on a device that's
+    /// failing to send.
+    private enum CalStage { case idle, factory, user, failed }
 
     private final class Device {
         let device: IOHIDDevice
@@ -31,6 +35,10 @@ final class RawHIDBackend: InputBackend {
         /// 0x21 report logs once per device instead of not at all — this
         /// silent-failure path must become visible (M2/I-2).
         var loggedParseFailure = false
+        /// One-shot gate (M-2) for the symmetric silent-failure path: a 0x30
+        /// report that JoyConReport.parseStandard can't parse. Logs once per
+        /// device instead of either 60/s forever or never.
+        var loggedStandardParseFailure = false
         var packetCounter: UInt8 = 0
         /// Polls the 0x03 0x30 mode-set subcommand until the first 0x30
         /// report proves the Joy-Con actually switched modes (see attach()).
@@ -54,6 +62,13 @@ final class RawHIDBackend: InputBackend {
     // detach/handleReport) or from code explicitly hopping onto `queue` (see
     // stop()). The serial queue is the real synchronization, not the actor.
     private nonisolated(unsafe) var devices: [IOHIDDevice: Device] = [:]
+    /// One-shot gate (I-1) so a runtime kIOReturnNotPermitted open failure
+    /// notifies the facade exactly once per backend instance — a second
+    /// Joy-Con hitting the same stale-TCC-state failure must not fire a
+    /// second forced swap into a GCBackend that's already active. Queue-
+    /// confined like `devices`: only touched from attach(), which only ever
+    /// runs on `queue`.
+    private nonisolated(unsafe) var permissionDeniedNotified = false
     private let queue = DispatchQueue(label: "joyconkeys.rawhid", qos: .userInteractive)
     private let debug = ProcessInfo.processInfo.environment["JOYKEYS_DEBUG"] != nil
 
@@ -61,7 +76,13 @@ final class RawHIDBackend: InputBackend {
         IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
     }
 
-    static func requestAccess() {
+    // nonisolated (M-4): RawHIDBackend's InputBackend conformance is
+    // @MainActor, which by default infers every member — including static
+    // ones — onto MainActor too. IOHIDRequestAccess blocks on the TCC
+    // prompt; SettingsPane dispatches this call onto a background queue to
+    // keep that block off MainActor, which only actually works if this
+    // function itself isn't implicitly hopped back to MainActor to run.
+    nonisolated static func requestAccess() {
         _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
     }
 
@@ -116,13 +137,32 @@ final class RawHIDBackend: InputBackend {
     // MARK: device lifecycle (HID queue)
 
     private func attach(_ dev: IOHIDDevice) {
-        let pid = IOHIDDeviceGetProperty(dev, kIOHIDProductIDKey as CFString) as? Int ?? 0
+        // I-3: the matching dictionary already restricts us to 0x2006/0x2007,
+        // but a property read failure (`?? 0`) used to silently fall through
+        // to `.right` — a Left Joy-Con misidentified as Right reads the
+        // wrong stick byte range, decodes a bogus RawStick(0,0), and latches
+        // a permanent .stickDown repeat. Refuse the device instead of
+        // guessing its side.
+        guard let pid = IOHIDDeviceGetProperty(dev, kIOHIDProductIDKey as CFString) as? Int,
+              pid == 0x2006 || pid == 0x2007 else {
+            NSLog("[joycon-keys] raw: unreadable/unexpected ProductID, ignoring device"); return
+        }
         let side: JoyConSide = pid == 0x2006 ? .left : .right
         let name = IOHIDDeviceGetProperty(dev, kIOHIDProductKey as CFString) as? String
             ?? "Joy-Con (\(side == .left ? "L" : "R"))"
         let open = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
         guard open == kIOReturnSuccess else {
             NSLog("[joycon-keys] raw open failed 0x%X for %@", open, name)
+            // I-1: IOHIDCheckAccess is a pre-flight check cached against the
+            // code-signing identity's TCC record — a rebuild/re-sign can
+            // leave it reporting stale-granted while the actual open comes
+            // back denied. Without this, attach() just returns here forever:
+            // the facade stays on raw HID, rawHIDDenied never flips, and the
+            // UI silently shows "No Joy-Con connected".
+            if open == kIOReturnNotPermitted, !permissionDeniedNotified {
+                permissionDeniedNotified = true
+                notifyMain { $0.backendPermissionDenied() }
+            }
             return
         }
         let d = Device(dev, side: side, name: name)
@@ -199,7 +239,19 @@ final class RawHIDBackend: InputBackend {
         }
 
         let data = Array(UnsafeBufferPointer(start: bytes, count: length))
-        guard let parsed = JoyConReport.parseStandard(data, side: d.side) else { return }
+        guard let parsed = JoyConReport.parseStandard(data, side: d.side) else {
+            // Symmetric with the SPIReadReply.parse failure log below (M-2):
+            // unconditional (not debug-gated) and one-shot per device, so a
+            // byte-0/layout assumption that stops holding on real hardware
+            // becomes visible instead of a silent per-report drop.
+            if !d.loggedStandardParseFailure {
+                d.loggedStandardParseFailure = true
+                let dump = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                NSLog("[joycon-keys] raw %@ JoyConReport.parseStandard returned nil for reportID 0x%02X, first 16 bytes: %@",
+                      d.name, reportID, dump)
+            }
+            return
+        }
 
         if debug, parsed.pressed != d.previous {
             NSLog("[debug] raw %@ pressed=%@", d.name,
@@ -221,7 +273,14 @@ final class RawHIDBackend: InputBackend {
             if moved {
                 d.lastStick = (x, y)
                 let id = ObjectIdentifier(d.device)
-                // Raw axes arrive in the upright vertical-grip frame: +y up, +x right.
+                // Raw axes arrive in the upright vertical-grip frame directly:
+                // +y up, +x right. The GC path's per-side sideways remap
+                // (GCBackend.bindStick) does NOT apply here — this is a
+                // deviation from spec §Sticks (I-4); verify against the
+                // hardware matrix row 8. If raw axes turn out to need
+                // rotation after all, the fix must be PER-SIDE, mirroring
+                // GCBackend's convention (.right → (x, -y), .left → (-x, y)),
+                // never a global axis swap.
                 notifyMain { $0.backendStick(id, up: y, right: x) }
             }
         }
@@ -236,7 +295,9 @@ final class RawHIDBackend: InputBackend {
             // Made visible once per device (M2/I-2): if this genuinely was a
             // subcommand-reply report and we still couldn't parse it, that
             // silent-failure path needs a trace, not just a dropped read.
-            if !d.loggedParseFailure, data.first == 0x21 {
+            // (M-2: handleReport already proved reportID == 0x21 before
+            // calling in here, so re-checking data.first was redundant.)
+            if !d.loggedParseFailure {
                 d.loggedParseFailure = true
                 NSLog("[joycon-keys] raw %@ SPIReadReply.parse returned nil for a 0x21 report", d.name)
             }
@@ -259,10 +320,19 @@ final class RawHIDBackend: InputBackend {
             d.calStage = .user
             requestCalibration(d)
         } else if reply.address == Self.userCalAddress(d.side) {
+            // A full-length reply for the address we asked about is a final
+            // answer regardless of whether the write-magic is present — most
+            // Joy-Cons have no user calibration, so "no magic" is the common
+            // case, not a truncated one (M-3). Stop retrying as soon as
+            // well-formedness is established, before checking magic, or a
+            // well-formed "no magic" reply burns all 5 SPI-read retries over
+            // 5 s on every connect.
+            guard reply.payload.count >= 11 else { return }
+            d.calTimer?.cancel()
+            d.calTimer = nil
             // Magic 0xB2A1, stored little-endian (A1 B2), marks the block as
             // written; without it the 9 bytes behind it are erased flash.
-            guard reply.payload.count >= 11,
-                  Self.hasUserCalibrationMagic(reply.payload) else { return }
+            guard Self.hasUserCalibrationMagic(reply.payload) else { return }
             install(Array(reply.payload[2...]), on: d, kind: "user")
         }
     }
@@ -326,6 +396,7 @@ final class RawHIDBackend: InputBackend {
         let length: UInt8
         switch d.calStage {
         case .idle: return
+        case .failed: return  // terminal (I-2) — send already failed for this device, don't retry
         case .factory: address = Self.factoryCalAddress(d.side); length = 9
         case .user: address = Self.userCalAddress(d.side); length = 11
         }
@@ -333,8 +404,15 @@ final class RawHIDBackend: InputBackend {
         guard result == kIOReturnSuccess else {
             // The send itself failed — fall back rather than retry into a
             // device that may be disappearing; detach() cleans up the timer
-            // if that's why the send failed.
-            d.calStage = .idle
+            // if that's why the send failed. `.failed`, not `.idle` (I-2):
+            // handleReport's `== .idle` gate is what STARTS the handshake on
+            // the first 0x30 report, and every 0x30 report re-checks it —
+            // leaving calStage at `.idle` here re-arms requestCalibration on
+            // the very next report, so a device stuck failing sendSubcommand
+            // (e.g. asymmetric BT degradation) spins this failure path at
+            // 60 Hz forever. `.failed` is terminal: the gate never matches it
+            // again for this device's lifetime.
+            d.calStage = .failed
             d.calTimer?.cancel()
             d.calTimer = nil
             return

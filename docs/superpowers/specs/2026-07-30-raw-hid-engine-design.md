@@ -103,6 +103,8 @@ rotated to the upright frame (raw values are in the sideways/hardware frame;
 apply the same per-side remap the GC path uses) → fed into the shared
 hysteresis/repeat logic. Behavior must be indistinguishable from GC mode.
 
+Implementation note (2026-07-30): raw HID delivers the upright frame directly — the per-side GC remap does not apply to the raw path; hardware matrix row 8 verifies.
+
 **Threading.** HID callbacks arrive on the background queue; translate raw
 bytes there (cheap, allocation-free), dispatch only state changes to
 MainActor. Debounce: report `0x30` streams at ~60 Hz continuously — compare
