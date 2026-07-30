@@ -11,11 +11,13 @@ struct JoyConView: View {
     @ObservedObject var recorder: ComboRecorder
     @Binding var highlighted: PadButton?
 
-    // Hardware colors from the Joy-Con SPI flash palette (switchbrew):
-    // shells #0AB9E6 / #FF3C28; buttons are TINTED near-black per side
-    // (#001E1E on neon blue, #1E0A0A on neon red), not neutral gray.
-    static let neonRed = Color(red: 1.0, green: 0.235, blue: 0.157)      // #FF3C28
-    static let neonBlue = Color(red: 0.039, green: 0.725, blue: 0.902)   // #0AB9E6
+    // Shell colors use Nintendo's MARKETING palette (#FF4554 / #00C3E3),
+    // not the muddier SPI-flash values (#FF3C28 / #0AB9E6) the console UI
+    // stores — the plastic under light reads like the marketing color.
+    // Buttons stay the SPI TINTED near-black per side (#001E1E on blue,
+    // #1E0A0A on red), not neutral gray.
+    static let neonRed = Color(red: 1.0, green: 0.271, blue: 0.329)      // #FF4554
+    static let neonBlue = Color(red: 0.0, green: 0.765, blue: 0.890)     // #00C3E3
     static let buttonOnBlue = Color(red: 0.0, green: 0.118, blue: 0.118) // #001E1E
     static let buttonOnRed = Color(red: 0.118, green: 0.039, blue: 0.039) // #1E0A0A
 
@@ -51,11 +53,17 @@ struct JoyConView: View {
         let radii = side == .left
             ? RectangleCornerRadii(topLeading: big, bottomLeading: big, bottomTrailing: small, topTrailing: small)
             : RectangleCornerRadii(topLeading: small, bottomLeading: small, bottomTrailing: big, topTrailing: big)
+        // Opaque shell + white/black overlay for depth. Never use
+        // shellColor.opacity(...) here: translucent fill composites with
+        // the window background and goes muddy-dark in dark mode.
         return UnevenRoundedRectangle(cornerRadii: radii)
-            .fill(
-                LinearGradient(
-                    colors: [shellColor.opacity(0.95), shellColor, shellColor.opacity(0.82)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing))
+            .fill(shellColor)
+            .overlay(
+                UnevenRoundedRectangle(cornerRadii: radii)
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.12), .clear, .black.opacity(0.10)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing)))
             .overlay(
                 UnevenRoundedRectangle(cornerRadii: radii)
                     .strokeBorder(.black.opacity(0.25), lineWidth: 1))
