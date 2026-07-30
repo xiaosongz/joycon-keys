@@ -15,8 +15,9 @@ Built for driving voice dictation and Claude Code option menus from the couch.
 | B                      | Escape      | Cancel / interrupt             |
 | X                      | `1`         | Pick option 1 directly         |
 | Y                      | `2`         | Pick option 2 directly         |
-| SL / SR (single) or ZL / ZR (paired) | Fn+Space | Dictation toggle    |
-| Home                   | Fn+Space    | Dictation toggle (backup)      |
+| SL (single) / ZL (paired) | double-Control | macOS dictation toggle    |
+| SR (single) / ZR (paired) | Fn+Space  | Third-party voice input        |
+| Home                   | double-Control | macOS dictation (backup)    |
 | Plus / Minus           | Shift+Tab   | Claude Code mode switch        |
 
 Shoulder-button reality on macOS (confirmed by
