@@ -5,10 +5,12 @@ import SwiftUI
 /// are. Click a button (on the drawing or in the list), press a combo, and
 /// the mapping applies immediately.
 struct ContentView: View {
+    enum Tab: Hashable { case left, right, settings }
+
     @EnvironmentObject var store: MappingStore
     @EnvironmentObject var engine: ControllerEngine
     @StateObject private var recorder = ComboRecorder()
-    @State private var pickedSide: JoyConSide = .right
+    @State private var tab: Tab = .right
     @State private var highlighted: PadButton?
 
     private var connectedSides: [JoyConSide] {
@@ -21,28 +23,33 @@ struct ContentView: View {
     // The picker always wins — a disconnected side renders dimmed rather
     // than being silently swapped for the connected one (that swap made
     // "Left" show the right Joy-Con whenever the left was charging).
-    private var shownSide: JoyConSide { pickedSide }
+    private var shownSide: JoyConSide { tab == .left ? .left : .right }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(alignment: .top, spacing: 28) {
-                JoyConView(
-                    side: shownSide,
-                    isConnected: connectedSides.contains(shownSide),
-                    recorder: recorder,
-                    highlighted: $highlighted
-                )
-                .frame(height: 460)
+            if tab == .settings {
+                SettingsPane()
+                    .frame(minHeight: 460)
+            } else {
+                HStack(alignment: .top, spacing: 28) {
+                    JoyConView(
+                        side: shownSide,
+                        isConnected: connectedSides.contains(shownSide),
+                        recorder: recorder,
+                        highlighted: $highlighted
+                    )
+                    .frame(height: 460)
 
-                MappingList(
-                    side: shownSide, recorder: recorder,
-                    highlighted: $highlighted
-                )
-                .frame(width: 330)
+                    MappingList(
+                        side: shownSide, recorder: recorder,
+                        highlighted: $highlighted
+                    )
+                    .frame(width: 330)
+                }
+                .padding(24)
             }
-            .padding(24)
         }
         .frame(minWidth: 580)
         .onAppear { snapToConnected() }
@@ -51,10 +58,13 @@ struct ContentView: View {
     }
 
     /// On connect/disconnect, follow the hardware — but never fight an
-    /// explicit picker click while the connection set is unchanged.
+    /// explicit picker click while the connection set is unchanged, and
+    /// never yank the user out of Settings.
     private func snapToConnected() {
-        if !connectedSides.isEmpty, !connectedSides.contains(pickedSide) {
-            pickedSide = connectedSides.first!
+        guard tab != .settings, !connectedSides.isEmpty else { return }
+        let side: JoyConSide = tab == .left ? .left : .right
+        if !connectedSides.contains(side) {
+            tab = connectedSides.first! == .left ? .left : .right
         }
     }
 
@@ -73,12 +83,13 @@ struct ContentView: View {
 
             Spacer()
 
-            Picker("", selection: $pickedSide) {
-                Text("Left").tag(JoyConSide.left)
-                Text("Right").tag(JoyConSide.right)
+            Picker("", selection: $tab) {
+                Text("Left").tag(Tab.left)
+                Text("Right").tag(Tab.right)
+                Image(systemName: "gearshape").tag(Tab.settings)
             }
             .pickerStyle(.segmented)
-            .frame(width: 140)
+            .frame(width: 200)
             .labelsHidden()
         }
         .padding(.horizontal, 20)

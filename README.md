@@ -65,8 +65,12 @@ Then:
 
 ### Start at login
 
-Either add the app in System Settings › General › Login Items, or install a
-LaunchAgent (survives crashes via `KeepAlive`):
+Easiest: flip **Start at login** in the app's ⚙ Settings tab (a standard
+macOS login item). The same tab has **Start minimized** — on by default;
+turn it off to open the mapping editor on launch.
+
+Alternatively install a LaunchAgent (survives crashes via `KeepAlive` —
+don't combine it with the login item, or two instances will race):
 
 ```sh
 cp scripts/launchagent.plist ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist

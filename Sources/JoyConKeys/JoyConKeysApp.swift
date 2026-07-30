@@ -9,6 +9,7 @@ struct JoyConKeysApp: App {
 
     init() {
         PreviewRender.runIfRequested()
+        UserDefaults.standard.register(defaults: ["startMinimized": true])
         let store = MappingStore()
         _store = StateObject(wrappedValue: store)
         _engine = StateObject(wrappedValue: ControllerEngine(store: store))
@@ -32,7 +33,10 @@ struct JoyConKeysApp: App {
                 .environmentObject(engine)
         }
         .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
+        // Scene launch behavior is fixed at construction — the Settings
+        // toggle therefore applies from the next start.
+        .defaultLaunchBehavior(
+            UserDefaults.standard.bool(forKey: "startMinimized") ? .suppressed : .presented)
     }
 }
 
