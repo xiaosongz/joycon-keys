@@ -11,12 +11,16 @@ struct JoyConView: View {
     @ObservedObject var recorder: ComboRecorder
     @Binding var highlighted: PadButton?
 
-    // Community-documented Joy-Con shell colors.
+    // Hardware colors from the Joy-Con SPI flash palette (switchbrew):
+    // shells #0AB9E6 / #FF3C28; buttons are TINTED near-black per side
+    // (#001E1E on neon blue, #1E0A0A on neon red), not neutral gray.
     static let neonRed = Color(red: 1.0, green: 0.235, blue: 0.157)      // #FF3C28
     static let neonBlue = Color(red: 0.039, green: 0.725, blue: 0.902)   // #0AB9E6
-    static let buttonGray = Color(red: 0.16, green: 0.16, blue: 0.17)
+    static let buttonOnBlue = Color(red: 0.0, green: 0.118, blue: 0.118) // #001E1E
+    static let buttonOnRed = Color(red: 0.118, green: 0.039, blue: 0.039) // #1E0A0A
 
     private var shellColor: Color { side == .left ? Self.neonBlue : Self.neonRed }
+    private var buttonColor: Color { side == .left ? Self.buttonOnBlue : Self.buttonOnRed }
 
     var body: some View {
         GeometryReader { geo in
@@ -82,7 +86,7 @@ struct JoyConView: View {
 
     private func faceR(w: CGFloat, h: CGFloat) -> some View {
         ZStack {
-            plusMinus(.menu, isPlus: true, at: CGPoint(x: w * 0.30, y: h * 0.075), w: w)
+            plusMinus(.menu, isPlus: true, at: CGPoint(x: w * 0.18, y: h * 0.075), w: w)
             // ABXY diamond: X top, A right, B bottom, Y left.
             face(.buttonX, "X", at: CGPoint(x: w * 0.54, y: h * 0.185), w: w)
             face(.buttonA, "A", at: CGPoint(x: w * 0.78, y: h * 0.275), w: w)
@@ -95,7 +99,7 @@ struct JoyConView: View {
 
     private func faceL(w: CGFloat, h: CGFloat) -> some View {
         ZStack {
-            plusMinus(.menu, isPlus: false, at: CGPoint(x: w * 0.70, y: h * 0.075), w: w)
+            plusMinus(.menu, isPlus: false, at: CGPoint(x: w * 0.82, y: h * 0.075), w: w)
             stick(at: CGPoint(x: w * 0.50, y: h * 0.30), w: w)
             // Direction buttons (reported as A/B/X/Y in the sideways frame).
             face(.buttonX, "▲", at: CGPoint(x: w * 0.46, y: h * 0.475), w: w)
@@ -109,7 +113,7 @@ struct JoyConView: View {
     private func face(_ id: PadButton, _ label: String, at p: CGPoint, w: CGFloat) -> some View {
         ZStack {
             Circle()
-                .fill(pressedFill(id, base: Self.buttonGray))
+                .fill(pressedFill(id, base: buttonColor))
                 .frame(width: w * 0.21, height: w * 0.21)
             Text(label)
                 .font(.system(size: w * 0.10, weight: .semibold, design: .rounded))
@@ -137,7 +141,7 @@ struct JoyConView: View {
             Circle()  // cap
                 .fill(
                     RadialGradient(
-                        colors: [Color(white: 0.30), Self.buttonGray],
+                        colors: [Color(white: 0.30), buttonColor],
                         center: .center, startRadius: 1, endRadius: w * 0.18))
                 .overlay(Circle().strokeBorder(active != nil ? Color.white.opacity(0.9) : .black.opacity(0.4), lineWidth: active != nil ? 2 : 1))
                 .frame(width: w * 0.36, height: w * 0.36)
@@ -150,7 +154,7 @@ struct JoyConView: View {
     private func homeButton(at p: CGPoint, w: CGFloat) -> some View {
         ZStack {
             Circle()
-                .fill(pressedFill(.home, base: Self.buttonGray))
+                .fill(pressedFill(.home, base: buttonColor))
                 .overlay(Circle().strokeBorder(Color(white: 0.45), lineWidth: w * 0.012))
                 .frame(width: w * 0.14, height: w * 0.14)
             Image(systemName: "house")
@@ -165,7 +169,7 @@ struct JoyConView: View {
     private func captureButton(at p: CGPoint, w: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: w * 0.03)
-                .fill(pressedFill(.capture, base: Self.buttonGray))
+                .fill(pressedFill(.capture, base: buttonColor))
                 .frame(width: w * 0.13, height: w * 0.13)
             Circle()
                 .fill(.white.opacity(0.85))
@@ -179,7 +183,7 @@ struct JoyConView: View {
     private func plusMinus(_ id: PadButton, isPlus: Bool, at p: CGPoint, w: CGFloat) -> some View {
         Image(systemName: isPlus ? "plus" : "minus")
             .font(.system(size: w * 0.085, weight: .black))
-            .foregroundStyle(pressedFill(id, base: Self.buttonGray))
+            .foregroundStyle(pressedFill(id, base: buttonColor))
             .position(p)
             .contentShape(Circle().scale(2))
             .onTapGesture { arm(id) }
@@ -197,7 +201,7 @@ struct JoyConView: View {
     private func arm(_ id: PadButton) {
         highlighted = id
         recorder.begin(for: id) { combo in
-            store.set(.combo(combo), for: id)
+            store.set(combo.map { .combo($0) } ?? .unassigned, for: id)
         }
     }
 }

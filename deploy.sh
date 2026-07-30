@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Maintainer deploy: build the .app, install to ~/Applications (launchd
+# Maintainer deploy: build the .app, install to /Applications (launchd
 # refuses executables on external volumes), point the LaunchAgent at it,
 # restart. Signing identity + bundle identifier stay constant so the
 # Accessibility grant survives.

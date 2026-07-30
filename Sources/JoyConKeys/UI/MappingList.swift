@@ -54,7 +54,7 @@ struct MappingRow: View {
                     recorder.cancel()
                 } else {
                     recorder.begin(for: button) { combo in
-                        store.set(.combo(combo), for: button)
+                        store.set(combo.map { .combo($0) } ?? .unassigned, for: button)
                     }
                 }
             } label: {
@@ -78,6 +78,10 @@ struct MappingRow: View {
             Menu {
                 Button("macOS Dictation (double-Control)") {
                     store.set(.doubleControl, for: button)
+                }
+                // Bare Escape can't be recorded (it cancels recording).
+                Button("Escape") {
+                    store.set(.combo(KeyCombo(keyCode: 53, modifiers: [])), for: button)
                 }
                 Button("Unassigned") {
                     store.set(.unassigned, for: button)

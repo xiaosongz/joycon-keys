@@ -13,12 +13,12 @@ struct JoyConKeysApp: App {
         _store = StateObject(wrappedValue: store)
         _engine = StateObject(wrappedValue: ControllerEngine(store: store))
 
-        // Prompt once if key synthesis would be silently dropped.
+        // Prompt once if key synthesis would be silently dropped. Log the
+        // result either way: with KeepAlive a denied grant otherwise looks
+        // identical to a working one (macOS drops synthetic events silently).
         let trusted = AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-        if !trusted {
-            NSLog("[joycon-keys] no Accessibility permission yet — grant it in System Settings")
-        }
+        NSLog("[joycon-keys] accessibility trusted: %@", trusted ? "yes" : "NO — grant it in System Settings › Privacy & Security › Accessibility")
     }
 
     var body: some Scene {

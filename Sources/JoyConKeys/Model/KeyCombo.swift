@@ -54,7 +54,10 @@ struct KeyCombo: Codable, Hashable {
         modifiers.symbols + (KeyCombo.keyNames[keyCode] ?? "vk\(keyCode)")
     }
 
-    /// Carbon virtual key code → display name (ANSI layout).
+    /// Carbon virtual key code → display name. Hardcoded ANSI-layout table:
+    /// on AZERTY/Dvorak the label AND the synthesized character both follow
+    /// the active layout, not this table. Storing key codes is still right;
+    /// just know that layout switches change what a combo produces.
     static let keyNames: [UInt16: String] = [
         0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
         8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
