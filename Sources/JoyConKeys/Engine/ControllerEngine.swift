@@ -15,7 +15,7 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
     @Published private(set) var connected: [Connected] = []
     @Published private(set) var pressed: Set<PadButton> = []
     /// True when the user wants raw HID but Input Monitoring is denied
-    /// (Settings shows the remediation caption). Set in Task 7.
+    /// (Settings shows the remediation caption).
     @Published private(set) var rawHIDDenied = false
 
     private let store: MappingStore
@@ -30,16 +30,25 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
         applyBackendPreference()
     }
 
-    /// Reads the useRawHID default and swaps backends if needed. Task 4
-    /// wires only the GC path; Task 7 adds the raw branch + permission check.
+    /// Reads the useRawHID default and swaps backends if needed. Raw HID
+    /// needs Input Monitoring; when that is denied we stay on GameController
+    /// and surface it via `rawHIDDenied` so Settings can show remediation.
+    /// Cheap to call repeatedly (Settings calls it on every activation) —
+    /// it returns immediately unless the running backend is the wrong one.
     func applyBackendPreference() {
-        let current = backend
-        current?.stop()
+        let wantRaw = UserDefaults.standard.bool(forKey: AppDefaults.useRawHIDKey)
+        let canRaw = wantRaw && RawHIDBackend.accessGranted()
+        rawHIDDenied = wantRaw && !canRaw
+        // With no backend yet (first launch) both casts are false, so this
+        // reads as "needs swap" either way.
+        let needsSwap = canRaw ? !(backend is RawHIDBackend) : !(backend is GCBackend)
+        guard needsSwap else { return }
+        backend?.stop()
         clearLiveState()
-        let next: InputBackend = GCBackend()
+        let next: InputBackend = canRaw ? RawHIDBackend() : GCBackend()
         backend = next
         next.start(delegate: self)
-        _ = current  // replaced
+        NSLog("[joycon-keys] input backend: %@", canRaw ? "raw HID" : "GameController")
     }
 
     private func clearLiveState() {
