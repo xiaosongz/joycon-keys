@@ -24,6 +24,12 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
     /// one stick can't cancel a repeat the *other* stick is driving.
     private var activeStick: ObjectIdentifier?
     private var backend: InputBackend?
+    /// Sticky for this launch: a runtime kIOReturnNotPermitted proves the
+    /// cached IOHIDCheckAccess "granted" is stale, so re-trying raw HID on
+    /// every activation would thrash backends (fail → fallback → retry).
+    /// Cleared only by toggling raw HID off — a real TCC change needs an
+    /// app relaunch anyway.
+    private var rawRuntimeDenied = false
 
     init(store: MappingStore) {
         self.store = store
@@ -37,7 +43,8 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
     /// it returns immediately unless the running backend is the wrong one.
     func applyBackendPreference() {
         let wantRaw = UserDefaults.standard.bool(forKey: AppDefaults.useRawHIDKey)
-        let canRaw = wantRaw && RawHIDBackend.accessGranted()
+        if !wantRaw { rawRuntimeDenied = false }
+        let canRaw = wantRaw && !rawRuntimeDenied && RawHIDBackend.accessGranted()
         // Settings calls this on every activation; only actually publish
         // when the value changes, or @Published fires objectWillChange for
         // no-op re-sets and floods SwiftUI with invalidations (MINOR-1).
@@ -99,12 +106,14 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
     /// granted, but an actual device open came back kIOReturnNotPermitted —
     /// stale TCC state after a rebuild/re-sign is the known repro. This is a
     /// forced fallback, not a preference re-apply: swap to GCBackend directly
-    /// WITHOUT re-reading useRawHID, so the toggle stays ON (per the design's
-    /// remediation flow — Settings shows the red caption, and granting the
-    /// permission promotes back to raw HID on the next didBecomeActive
-    /// refresh without the user re-toggling).
+    /// WITHOUT re-reading useRawHID, so the toggle stays ON and Settings
+    /// shows the red caption. `rawRuntimeDenied` keeps later
+    /// applyBackendPreference() calls from re-trying raw HID this launch
+    /// (the stale-granted check would just fail the same way and thrash);
+    /// recovery is toggle off/on or relaunch after fixing the grant.
     func backendPermissionDenied() {
         rawHIDDenied = true
+        rawRuntimeDenied = true
         backend?.stop()
         clearLiveState()
         let next: InputBackend = GCBackend()
