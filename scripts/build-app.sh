@@ -20,8 +20,9 @@ APP="dist/JoyConKeys.app"
 swift build -c release
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
+cp scripts/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp "$(swift build -c release --show-bin-path)/JoyConKeys" "$APP/Contents/MacOS/JoyConKeys"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then

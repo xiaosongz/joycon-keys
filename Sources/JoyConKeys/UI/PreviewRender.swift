@@ -3,10 +3,15 @@ import SwiftUI
 
 /// Headless snapshot for QA and README screenshots:
 ///   JoyConKeys --render-preview /tmp/out   →  out-window.png, out-pair.png
+///   JoyConKeys --render-icon /tmp/icon.png →  1024×1024 app icon master
 @MainActor
 enum PreviewRender {
     static func runIfRequested() {
         let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--render-icon"), args.count > i + 1 {
+            save(AppIconView(), to: args[i + 1], scale: 1.0)
+            exit(0)
+        }
         guard let i = args.firstIndex(of: "--render-preview"), args.count > i + 1 else { return }
         let base = args[i + 1]
         let store = MappingStore()
@@ -36,9 +41,9 @@ enum PreviewRender {
         exit(0)
     }
 
-    private static func save(_ view: some View, to path: String) {
+    private static func save(_ view: some View, to path: String, scale: CGFloat = 2.0) {
         let renderer = ImageRenderer(content: view)
-        renderer.scale = 2.0
+        renderer.scale = scale
         guard let tiff = renderer.nsImage?.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else {
