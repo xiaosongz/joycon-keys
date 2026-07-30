@@ -64,6 +64,35 @@ func postDictationToggle() {
     }
 }
 
+// Fn+Space as an explicit press-and-release sequence (~0.2 s total).
+// Fn has no ordinary key events — it must be synthesized as flagsChanged
+// (vk 63) with the flag set on press and CLEARED on release; a flags-only
+// space event leaves Fn latched system-wide because no fn-up ever fires.
+func postFnSpace() {
+    let src = CGEventSource(stateID: .hidSystemState)
+    if let fnDown = CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: true) {
+        fnDown.type = .flagsChanged
+        fnDown.flags = .maskSecondaryFn
+        fnDown.post(tap: .cghidEventTap)
+    }
+    usleep(50_000)
+    if let d = CGEvent(keyboardEventSource: src, virtualKey: KEY_SPACE, keyDown: true) {
+        d.flags = .maskSecondaryFn
+        d.post(tap: .cghidEventTap)
+    }
+    usleep(50_000)
+    if let u = CGEvent(keyboardEventSource: src, virtualKey: KEY_SPACE, keyDown: false) {
+        u.flags = .maskSecondaryFn
+        u.post(tap: .cghidEventTap)
+    }
+    usleep(50_000)
+    if let fnUp = CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: false) {
+        fnUp.type = .flagsChanged
+        fnUp.flags = []
+        fnUp.post(tap: .cghidEventTap)
+    }
+}
+
 // MARK: - Auto-repeat for held directions
 
 final class Repeater {
@@ -119,10 +148,10 @@ func bind(_ button: GCControllerButtonInput?, _ label: String,
     }
 }
 
-func bindDictation(_ button: GCControllerButtonInput?, _ label: String) {
+func bindAction(_ button: GCControllerButtonInput?, _ label: String, _ action: @escaping () -> Void) {
     button?.pressedChangedHandler = { _, _, pressed in
         if debug { print("[debug] \(label) pressed=\(pressed)") }
-        if pressed { postDictationToggle() }
+        if pressed { action() }
     }
 }
 
@@ -146,11 +175,11 @@ func wire(_ controller: GCController) {
     // pair reports ZL/ZR (as triggers) instead — see SDL issue #6095.
     // SL = macOS dictation (synthetic double-Control, the registered hotkey);
     // SR = synthetic Fn+Space (third-party voice input shortcut).
-    bindDictation(profile.buttons[GCInputLeftShoulder], "LeftShoulder")
-    bind(profile.buttons[GCInputRightShoulder], "RightShoulder", KEY_SPACE, .maskSecondaryFn)
-    bindDictation(profile.buttons[GCInputLeftTrigger], "LeftTrigger")
-    bind(profile.buttons[GCInputRightTrigger], "RightTrigger", KEY_SPACE, .maskSecondaryFn)
-    bindDictation(profile.buttons[GCInputButtonHome], "Home")
+    bindAction(profile.buttons[GCInputLeftShoulder], "LeftShoulder", postDictationToggle)
+    bindAction(profile.buttons[GCInputRightShoulder], "RightShoulder", postFnSpace)
+    bindAction(profile.buttons[GCInputLeftTrigger], "LeftTrigger", postDictationToggle)
+    bindAction(profile.buttons[GCInputRightTrigger], "RightTrigger", postFnSpace)
+    bindAction(profile.buttons[GCInputButtonHome], "Home", postDictationToggle)
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
 
