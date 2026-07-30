@@ -55,3 +55,26 @@ struct JoyConReport: Equatable {
         return JoyConReport(pressed: pressed, stick: stick)
     }
 }
+
+/// One SPI-flash read (subcommand 0x10) answered inside a 0x21 reply report.
+/// Pure byte parsing — no IOKit, fully unit-testable.
+struct SPIReadReply: Equatable {
+    /// Echoed back by the Joy-Con, so a reply identifies which block it is.
+    var address: UInt32
+    var payload: [UInt8]
+
+    /// 0x21 layout (verified on hardware): byte 0 the report id, byte 13 the
+    /// ack (bit 7 set = ACK, clear = NACK), byte 14 the echoed subcommand id,
+    /// bytes 15-18 the little-endian SPI address, byte 19 the length, and
+    /// bytes 20+ the payload. Replies to other subcommands (the 0x03 mode-set
+    /// ack, for one) arrive on the same report id and are rejected here.
+    static func parse(_ bytes: [UInt8]) -> SPIReadReply? {
+        guard bytes.count > 20, bytes[0] == 0x21 else { return nil }
+        guard bytes[13] & 0x80 != 0, bytes[14] == 0x10 else { return nil }
+        let address = UInt32(bytes[15]) | (UInt32(bytes[16]) << 8)
+            | (UInt32(bytes[17]) << 16) | (UInt32(bytes[18]) << 24)
+        let length = Int(bytes[19])
+        guard length > 0, bytes.count >= 20 + length else { return nil }
+        return SPIReadReply(address: address, payload: Array(bytes[20..<(20 + length)]))
+    }
+}

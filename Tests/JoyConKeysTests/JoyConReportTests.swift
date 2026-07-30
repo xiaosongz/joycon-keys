@@ -59,3 +59,69 @@ final class JoyConReportTests: XCTestCase {
         XCTAssertEqual(l.stick, RawStick(x: 0x234, y: 0x7AD))
     }
 }
+
+final class SPIReadReplyTests: XCTestCase {
+    /// 0x21 subcommand-reply skeleton: byte 13 ack, 14 echoed subcommand,
+    /// 15-18 little-endian SPI address, 19 length, 20+ payload.
+    private func reply(ack: UInt8 = 0x90, subcommand: UInt8 = 0x10,
+                       address: UInt32 = 0x603D, length: UInt8? = nil,
+                       payload: [UInt8]) -> [UInt8] {
+        var b = [UInt8](repeating: 0, count: 20)
+        b[0] = 0x21
+        b[13] = ack
+        b[14] = subcommand
+        b[15] = UInt8(address & 0xFF)
+        b[16] = UInt8((address >> 8) & 0xFF)
+        b[17] = UInt8((address >> 16) & 0xFF)
+        b[18] = UInt8((address >> 24) & 0xFF)
+        b[19] = length ?? UInt8(payload.count)
+        return b + payload
+    }
+
+    func testParsesFactoryRead() {
+        let r = SPIReadReply.parse(
+            reply(address: 0x603D, payload: Array(1...9)))
+        XCTAssertEqual(r, SPIReadReply(address: 0x603D, payload: Array(1...9)))
+    }
+
+    func testParsesUserReadAddressAndTrailingBytes() {
+        // 0x801B + 11 bytes, with the usual 49-byte report tail beyond it.
+        var raw = reply(address: 0x801B, payload: [0xA1, 0xB2] + Array(1...9))
+        raw += [UInt8](repeating: 0xFF, count: 20)
+        let r = SPIReadReply.parse(raw)!
+        XCTAssertEqual(r.address, 0x801B)
+        XCTAssertEqual(r.payload, [0xA1, 0xB2] + Array(1...9))
+    }
+
+    func testRejectsNack() {
+        // Bit 7 clear in byte 13 = the Joy-Con refused the read.
+        XCTAssertNil(SPIReadReply.parse(reply(ack: 0x00, payload: Array(1...9))))
+    }
+
+    func testRejectsOtherSubcommands() {
+        // 0x03 = the mode-set ack, which arrives as a 0x21 report too.
+        XCTAssertNil(SPIReadReply.parse(reply(subcommand: 0x03, payload: Array(1...9))))
+    }
+
+    func testRejectsTruncatedPayload() {
+        // Claims 9 bytes, carries 4.
+        XCTAssertNil(SPIReadReply.parse(
+            reply(length: 9, payload: [1, 2, 3, 4])))
+        XCTAssertNil(SPIReadReply.parse(reply(payload: [])))
+    }
+
+    func testRejectsNon0x21Report() {
+        var raw = reply(payload: Array(1...9))
+        raw[0] = 0x30
+        XCTAssertNil(SPIReadReply.parse(raw))
+    }
+
+    func testFactoryPayloadFeedsStickCalibration() {
+        // Composition check: a parsed factory payload decodes as left-side cal.
+        let spi: [UInt8] = [0xB0, 0xC4, 0x44, 0xD0, 0x47, 0x83, 0x84, 0x83, 0x38]
+        let r = SPIReadReply.parse(reply(address: 0x603D, payload: spi))!
+        XCTAssertEqual(StickCalibration.decode(spi: r.payload, side: .left),
+                       StickCalibration.decode(spi: spi, side: .left))
+        XCTAssertNotNil(StickCalibration.decode(spi: r.payload, side: .left))
+    }
+}

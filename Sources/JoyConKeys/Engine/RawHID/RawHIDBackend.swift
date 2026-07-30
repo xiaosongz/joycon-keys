@@ -6,6 +6,10 @@ import IOKit.hid
 /// HID callbacks land on a background queue; only translated state changes
 /// hop to the MainActor delegate.
 final class RawHIDBackend: InputBackend {
+    /// Stick-calibration handshake: idle → factory read issued → user read
+    /// issued. Both replies land in handleSubcommandReply.
+    private enum CalStage { case idle, factory, user }
+
     private final class Device {
         let device: IOHIDDevice
         let side: JoyConSide
@@ -13,7 +17,9 @@ final class RawHIDBackend: InputBackend {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 362)
         var previous: Set<PadButton> = []
         var calibration = StickCalibration.fallback
-        var calibrated = false
+        /// How far the SPI calibration handshake has got. The two reads are
+        /// chained rather than fired together — see requestCalibration().
+        var calStage: CalStage = .idle
         var packetCounter: UInt8 = 0
         /// Polls the 0x03 0x30 mode-set subcommand until the first 0x30
         /// report proves the Joy-Con actually switched modes (see attach()).
@@ -154,7 +160,7 @@ final class RawHIDBackend: InputBackend {
 
         if reportID == 0x21 {
             let data = Array(UnsafeBufferPointer(start: bytes, count: length))
-            handleSubcommandReply(d, data)  // Task 6 fills this in
+            handleSubcommandReply(d, data)
             return
         }
         // 0x3F simple-mode reports (and anything else) arrive until the
@@ -165,6 +171,16 @@ final class RawHIDBackend: InputBackend {
         if let timer = d.modeSetTimer {
             timer.cancel()
             d.modeSetTimer = nil
+        }
+        // The Joy-Con only answers SPI reads once it is actually in 0x30
+        // mode, and the mode-set itself may take several retries to land —
+        // so calibration is requested off the first 0x30 report rather than
+        // from attach(). A separate flag (not `modeSetTimer == nil`) gates
+        // it: a report arriving before attach() assigned the timer would
+        // otherwise skip calibration for the life of the connection.
+        if d.calStage == .idle {
+            d.calStage = .factory
+            requestCalibration(d)
         }
 
         let data = Array(UnsafeBufferPointer(start: bytes, count: length))
@@ -196,11 +212,64 @@ final class RawHIDBackend: InputBackend {
         }
     }
 
+    /// Installs stick calibration from an SPI read reply, and chains the user
+    /// block off the factory one. Entirely best-effort: `calibration` starts
+    /// at `.fallback`, so a dropped or unreadable block only costs some stick
+    /// scaling accuracy — the Joy-Con still works.
     private func handleSubcommandReply(_ d: Device, _ data: [UInt8]) {
-        // Task 6: SPI calibration replies. Until then: ignore.
+        guard let reply = SPIReadReply.parse(data) else { return }
+
+        if reply.address == Self.factoryCalAddress(d.side) {
+            // Stage-gated so a duplicate factory reply can neither re-issue
+            // the user read nor overwrite user calibration already installed.
+            guard d.calStage == .factory else { return }
+            install(reply.payload, on: d, kind: "factory")
+            // Chain, don't batch: the user block overrides factory when its
+            // magic is set, but issuing it only now means a lost reply leaves
+            // the (already correct) factory values in place.
+            d.calStage = .user
+            sendSubcommand(d, 0x10, Self.spiArgs(Self.userCalAddress(d.side), 11))
+        } else if reply.address == Self.userCalAddress(d.side) {
+            // Magic 0xB2A1, stored little-endian (A1 B2), marks the block as
+            // written; without it the 9 bytes behind it are erased flash.
+            guard reply.payload.count >= 11,
+                  reply.payload[0] == 0xA1, reply.payload[1] == 0xB2 else { return }
+            install(Array(reply.payload[2...]), on: d, kind: "user")
+        }
+    }
+
+    private func install(_ spi: [UInt8], on d: Device, kind: String) {
+        guard let cal = StickCalibration.decode(spi: spi, side: d.side) else { return }
+        d.calibration = cal
+        if debug { NSLog("[debug] raw %@ %@ stick calibration loaded", d.name, kind) }
     }
 
     // MARK: subcommands (HID queue)
+
+    /// Factory stick calibration sits at 0x603D (left) / 0x6046 (right), 9
+    /// bytes in the layout StickCalibration.decode expects.
+    private static func factoryCalAddress(_ side: JoyConSide) -> UInt32 {
+        side == .left ? 0x603D : 0x6046
+    }
+
+    /// User calibration at 0x8010 (left) / 0x801B (right): a 2-byte 0xB2A1
+    /// magic followed by the same 9-byte layout — 11 bytes read as one block.
+    private static func userCalAddress(_ side: JoyConSide) -> UInt32 {
+        side == .left ? 0x8010 : 0x801B
+    }
+
+    private static func spiArgs(_ address: UInt32, _ length: UInt8) -> [UInt8] {
+        [UInt8(address & 0xFF), UInt8((address >> 8) & 0xFF),
+         UInt8((address >> 16) & 0xFF), UInt8((address >> 24) & 0xFF), length]
+    }
+
+    /// Starts the calibration handshake with the factory block; the user
+    /// block follows from its reply (see handleSubcommandReply). Sending both
+    /// at once risks the second being dropped — the same "subcommand sent too
+    /// eagerly is silently ignored" behavior that forced the mode-set retry.
+    private func requestCalibration(_ d: Device) {
+        sendSubcommand(d, 0x10, Self.spiArgs(Self.factoryCalAddress(d.side), 9))
+    }
 
     private func sendSubcommand(_ d: Device, _ subcommand: UInt8, _ args: [UInt8]) {
         var packet: [UInt8] = [d.packetCounter]
