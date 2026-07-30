@@ -21,6 +21,7 @@ IOHIDManagerSetDeviceMatchingMultiple(manager, [
 
 var buffers: [IOHIDDevice: UnsafeMutablePointer<UInt8>] = [:]
 var lastLine: [String: String] = [:]
+var counter: UInt8 = 0
 
 let matchCallback: IOHIDDeviceCallback = { _, _, _, device in
     let name = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String ?? "?"
@@ -38,10 +39,22 @@ let matchCallback: IOHIDDeviceCallback = { _, _, _, device in
             print(line)
         }
     }, Unmanaged.passRetained(name as CFString).toOpaque())
-    // Subcommand 0x03 0x30: switch to standard full report mode.
-    var packet: [UInt8] = [0x00, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, 0x03, 0x30]
-    let r = IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0x01, &packet, packet.count)
-    print("mode-set setReport: \(String(format: "0x%X", r))")
+    // Subcommand 0x03 0x30 (standard full report mode), retried every 3 s
+    // alternating two buffer conventions — first run showed setReport
+    // succeeding (0x0) while the device stayed in 0x3F simple mode:
+    //   A: payload without report ID (ID passed only as the reportID param)
+    //   B: payload with a leading 0x01 ID byte as well
+    let timer = Timer(timeInterval: 3, repeats: true) { _ in
+        let body: [UInt8] = [counter, 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, 0x03, 0x30]
+        counter = (counter &+ 1) & 0x0F
+        let convB = counter % 2 == 0
+        let packet: [UInt8] = convB ? [0x01] + body : body
+        let r = packet.withUnsafeBufferPointer {
+            IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 0x01, $0.baseAddress!, $0.count)
+        }
+        print("mode-set conv\(convB ? "B" : "A") setReport: \(String(format: "0x%X", r))")
+    }
+    RunLoop.current.add(timer, forMode: .default)
 }
 IOHIDManagerRegisterDeviceMatchingCallback(manager, matchCallback, nil)
 IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)

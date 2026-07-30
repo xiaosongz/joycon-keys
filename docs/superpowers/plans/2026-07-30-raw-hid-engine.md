@@ -1,5 +1,14 @@
 # Raw HID Engine Implementation Plan
 
+**Spike verdict (2026-07-30): PASS.** Raw reports coexist with GameController:
+0x21 subcommand ack + continuous 0x30 full reports while the GC-based app ran.
+Two corrections learned: (1) the mode-set subcommand is ignored if sent
+immediately after IOHIDDeviceOpen — retry on a ~2-3 s timer until the first
+0x30 arrives (NOT retry-on-0x3F-receipt as Task 5's code sketch does: 0x3F
+reports are event-driven, a silent controller never triggers that retry);
+(2) payload convention A (no leading 0x01 in the buffer; ID only in the
+reportID parameter) is the one that works.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Settings toggle "Always use raw HID" that swaps the input engine from GameController to a direct IOHIDManager reader so all four SL/SR rail buttons work regardless of macOS Joy-Con merge state.
