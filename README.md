@@ -16,8 +16,8 @@ Built for driving voice dictation and Claude Code option menus from the couch.
 | X                      | `1`         | Pick option 1 directly         |
 | Y                      | `2`         | Pick option 2 directly         |
 | SL (single) / ZL (paired) | double-Control | macOS dictation toggle    |
-| SR (single) / ZR (paired) | Fn+Space  | Third-party voice input        |
-| Home                   | double-Control | macOS dictation (backup)    |
+| SR (single) / ZR (paired) | Ctrl+Opt+Cmd+D | Codex dictation toggle    |
+| Home                   | double-Control | macOS dictation (backup)*   |
 | Plus / Minus           | Shift+Tab   | Claude Code mode switch        |
 
 Shoulder-button reality on macOS (confirmed by
@@ -77,3 +77,8 @@ registers — "press Control twice" (symbolic hotkey 164) — not a key combo.
 - Stick handling is digital with hysteresis (engage past 0.6, release inside
   0.4) plus auto-repeat (400 ms delay, 120 ms interval), tuned for menu
   navigation rather than analog control.
+
+**Home button caveat:** if Steam is running (even in the background), Steam
+grabs the controller Home/guide button globally and brings itself to the
+front — that is Steam's own "guide button focuses Steam" behavior, not this
+tool. Fix: quit Steam, or disable it in Steam → Settings → Controller.

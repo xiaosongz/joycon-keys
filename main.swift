@@ -9,7 +9,8 @@
 //   B                     -> Escape
 //   X                     -> "1"
 //   Y                     -> "2"
-//   stick click           -> F5            (dictation toggle)
+//   SL / ZL / Home        -> macOS dictation (double-Control)
+//   SR / ZR               -> Codex dictation (Ctrl+Opt+Cmd+D)
 //   Plus / Minus          -> Shift+Tab     (Claude Code mode switch)
 //
 // Build:  swiftc -O main.swift -o joycon-keys
@@ -32,6 +33,9 @@ let KEY_1: CGKeyCode = 18
 let KEY_2: CGKeyCode = 19
 let KEY_SPACE: CGKeyCode = 49
 let KEY_CONTROL: CGKeyCode = 59
+let KEY_OPTION: CGKeyCode = 58
+let KEY_COMMAND: CGKeyCode = 55
+let KEY_D: CGKeyCode = 2
 
 // MARK: - Key synthesis
 
@@ -64,32 +68,40 @@ func postDictationToggle() {
     }
 }
 
-// Fn+Space as an explicit press-and-release sequence (~0.2 s total).
-// Fn has no ordinary key events — it must be synthesized as flagsChanged
-// (vk 63) with the flag set on press and CLEARED on release; a flags-only
-// space event leaves Fn latched system-wide because no fn-up ever fires.
-func postFnSpace() {
+// Codex "Toggle dictation" hotkey: Control+Option+Command+D, held ~0.1 s
+// and fully released. Modifiers are posted as real key events (not just
+// flags on the D event) so hotkey listeners that watch modifier keys see
+// a natural press; every modifier is released at the end — nothing latches.
+func postCodexDictation() {
     let src = CGEventSource(stateID: .hidSystemState)
-    if let fnDown = CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: true) {
-        fnDown.type = .flagsChanged
-        fnDown.flags = .maskSecondaryFn
-        fnDown.post(tap: .cghidEventTap)
+    let mods: [(CGKeyCode, CGEventFlags)] = [
+        (KEY_CONTROL, .maskControl), (KEY_OPTION, .maskAlternate), (KEY_COMMAND, .maskCommand),
+    ]
+    var flags: CGEventFlags = []
+    for (key, flag) in mods {
+        flags.insert(flag)
+        if let d = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true) {
+            d.flags = flags
+            d.post(tap: .cghidEventTap)
+        }
+        usleep(10_000)
     }
-    usleep(50_000)
-    if let d = CGEvent(keyboardEventSource: src, virtualKey: KEY_SPACE, keyDown: true) {
-        d.flags = .maskSecondaryFn
+    if let d = CGEvent(keyboardEventSource: src, virtualKey: KEY_D, keyDown: true) {
+        d.flags = flags
         d.post(tap: .cghidEventTap)
     }
-    usleep(50_000)
-    if let u = CGEvent(keyboardEventSource: src, virtualKey: KEY_SPACE, keyDown: false) {
-        u.flags = .maskSecondaryFn
+    usleep(100_000)
+    if let u = CGEvent(keyboardEventSource: src, virtualKey: KEY_D, keyDown: false) {
+        u.flags = flags
         u.post(tap: .cghidEventTap)
     }
-    usleep(50_000)
-    if let fnUp = CGEvent(keyboardEventSource: src, virtualKey: 63, keyDown: false) {
-        fnUp.type = .flagsChanged
-        fnUp.flags = []
-        fnUp.post(tap: .cghidEventTap)
+    for (key, flag) in mods.reversed() {
+        flags.remove(flag)
+        usleep(10_000)
+        if let u = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false) {
+            u.flags = flags
+            u.post(tap: .cghidEventTap)
+        }
     }
 }
 
@@ -174,11 +186,11 @@ func wire(_ controller: GCController) {
     // Single Joy-Con reports only SL/SR (as Left/Right Shoulder); a combined
     // pair reports ZL/ZR (as triggers) instead — see SDL issue #6095.
     // SL = macOS dictation (synthetic double-Control, the registered hotkey);
-    // SR = synthetic Fn+Space (third-party voice input shortcut).
+    // SR = Codex dictation toggle (Control+Option+Command+D).
     bindAction(profile.buttons[GCInputLeftShoulder], "LeftShoulder", postDictationToggle)
-    bindAction(profile.buttons[GCInputRightShoulder], "RightShoulder", postFnSpace)
+    bindAction(profile.buttons[GCInputRightShoulder], "RightShoulder", postCodexDictation)
     bindAction(profile.buttons[GCInputLeftTrigger], "LeftTrigger", postDictationToggle)
-    bindAction(profile.buttons[GCInputRightTrigger], "RightTrigger", postFnSpace)
+    bindAction(profile.buttons[GCInputRightTrigger], "RightTrigger", postCodexDictation)
     bindAction(profile.buttons[GCInputButtonHome], "Home", postDictationToggle)
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
