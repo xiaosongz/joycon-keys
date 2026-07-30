@@ -35,13 +35,16 @@ let KEY_CONTROL: CGKeyCode = 59
 
 // MARK: - Key synthesis
 
+// Modifier flags go on the key-DOWN only; the key-up must carry empty flags,
+// otherwise the synthetic modifier (especially Fn) stays latched system-wide.
 func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
     let src = CGEventSource(stateID: .hidSystemState)
-    for down in [true, false] {
-        guard let ev = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: down) else { continue }
-        ev.flags = flags
-        ev.post(tap: .cghidEventTap)
-    }
+    guard let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true),
+          let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) else { return }
+    down.flags = flags
+    up.flags = []
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
 }
 
 // Dictation shortcut on this machine = "press Control twice" (symbolic
