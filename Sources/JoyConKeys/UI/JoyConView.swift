@@ -39,8 +39,10 @@ struct JoyConView: View {
                     faceR(w: w, h: h)
                 }
             }
-            .opacity(isConnected ? 1.0 : 0.35)
-            .saturation(isConnected ? 1.0 : 0.4)
+            // Disconnected = gently muted, never mud: heavy opacity over a
+            // dark window background turned neon red into brown.
+            .opacity(isConnected ? 1.0 : 0.9)
+            .saturation(isConnected ? 1.0 : 0.75)
         }
         .aspectRatio(0.385, contentMode: .fit)
     }
