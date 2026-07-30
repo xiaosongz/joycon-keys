@@ -19,6 +19,7 @@ struct StickCalibration: Equatable {
 
     static func decode(spi bytes: [UInt8], side: JoyConSide) -> StickCalibration? {
         guard bytes.count >= 9 else { return nil }
+        guard side != .other else { return nil }
         func pair(_ i: Int) -> (Int, Int) {
             (Int(bytes[i]) | (Int(bytes[i + 1] & 0x0F) << 8),
              (Int(bytes[i + 1]) >> 4) | (Int(bytes[i + 2]) << 4))
