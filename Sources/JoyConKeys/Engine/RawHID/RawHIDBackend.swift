@@ -18,6 +18,10 @@ final class RawHIDBackend: InputBackend {
         /// Polls the 0x03 0x30 mode-set subcommand until the first 0x30
         /// report proves the Joy-Con actually switched modes (see attach()).
         var modeSetTimer: DispatchSourceTimer?
+        /// Last normalized stick value pushed to the delegate — 0x30 streams
+        /// at 60 Hz/device, so a resting stick must not re-notify every
+        /// report (see handleReport).
+        var lastStick: (Float, Float)?
         init(_ d: IOHIDDevice, side: JoyConSide, name: String) {
             device = d; self.side = side; self.name = name
         }
@@ -66,20 +70,28 @@ final class RawHIDBackend: InputBackend {
 
     @MainActor func stop() {
         guard let m = manager else { return }
-        // Cancel delivers no further callbacks once its handler runs; tear
-        // down device state on the HID queue to avoid racing a live report.
-        IOHIDManagerSetCancelHandler(m) { }
-        IOHIDManagerCancel(m)
-        queue.async { [self] in
+        manager = nil
+        delegate = nil
+        // IOHIDManagerCancel is asynchronous; IOKit guarantees the cancel
+        // handler runs on `queue` only after all in-flight events have been
+        // delivered. Tearing down device state (unregistering the report
+        // callback, closing the device, releasing the Device/its buffer)
+        // from IN the handler — rather than a queue.async racing the cancel
+        // — is what prevents IOKit from writing into a freed report buffer.
+        // The `[self]` capture plus `_ = m` below keep both this backend and
+        // the manager alive until IOKit invokes the handler and then
+        // releases it itself, breaking the cycle without a `weak self`.
+        IOHIDManagerSetCancelHandler(m) { [self] in
             for (dev, d) in devices {
                 d.modeSetTimer?.cancel()
                 d.modeSetTimer = nil
+                IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
                 IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
             }
             devices.removeAll()
+            _ = m   // keep the manager alive until its own cancel handler runs (I1)
         }
-        manager = nil
-        delegate = nil
+        IOHIDManagerCancel(m)
     }
 
     // MARK: device lifecycle (HID queue)
@@ -126,7 +138,10 @@ final class RawHIDBackend: InputBackend {
         guard let d = devices.removeValue(forKey: dev) else { return }
         d.modeSetTimer?.cancel()
         d.modeSetTimer = nil
+        IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
         IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+        for b in d.previous { notifyMain { $0.backendButton(b, pressed: false) } }
+        d.previous = []
         notifyMain { $0.backendDisconnected(id: ObjectIdentifier(dev), name: d.name) }
     }
 
@@ -168,9 +183,16 @@ final class RawHIDBackend: InputBackend {
 
         if let stick = parsed.stick {
             let (x, y) = d.calibration.normalize(stick)
-            let id = ObjectIdentifier(d.device)
-            // Raw axes arrive in the upright vertical-grip frame: +y up, +x right.
-            notifyMain { $0.backendStick(id, up: y, right: x) }
+            // 0x30 streams at 60 Hz/device; only push to MainActor when the
+            // normalized value actually moved, or a resting pair floods
+            // SwiftUI with @Published invalidations at 120/sec (I2).
+            let moved = d.lastStick.map { abs($0.0 - x) > 0.01 || abs($0.1 - y) > 0.01 } ?? true
+            if moved {
+                d.lastStick = (x, y)
+                let id = ObjectIdentifier(d.device)
+                // Raw axes arrive in the upright vertical-grip frame: +y up, +x right.
+                notifyMain { $0.backendStick(id, up: y, right: x) }
+            }
         }
     }
 
