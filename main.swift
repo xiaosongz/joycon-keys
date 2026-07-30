@@ -4,7 +4,7 @@
 // macOS 13 Ventura) and synthesizes keyboard events via CGEvent.
 //
 // Mapping:
-//   stick / dpad up-down  -> Up / Down arrow (with auto-repeat)
+//   stick (vertical grip) -> arrow keys (with auto-repeat); up = toward X
 //   A                     -> Return
 //   B                     -> Escape
 //   X                     -> "1"
@@ -27,6 +27,8 @@ let KEY_RETURN: CGKeyCode = 36
 let KEY_TAB: CGKeyCode = 48
 let KEY_ESCAPE: CGKeyCode = 53
 let KEY_F5: CGKeyCode = 96
+let KEY_LEFT: CGKeyCode = 123
+let KEY_RIGHT: CGKeyCode = 124
 let KEY_DOWN: CGKeyCode = 125
 let KEY_UP: CGKeyCode = 126
 let KEY_1: CGKeyCode = 18
@@ -133,13 +135,26 @@ final class Repeater {
 let repeater = Repeater()
 
 // Stick-to-digital with hysteresis: engage past 0.6, release inside 0.4.
-func handleVertical(_ y: Float) {
-    if y > 0.6 {
-        repeater.press(KEY_UP)
-    } else if y < -0.6 {
-        repeater.press(KEY_DOWN)
-    } else if abs(y) < 0.4 {
+//
+// Vertical-grip remap: macOS reports single-Joy-Con axes in the SIDEWAYS
+// grip frame (rail up, stick left, buttons right). The user holds Joy-Con
+// (R) vertically (as when docked on the console) — that grip is the
+// sideways frame rotated 90° counterclockwise, so:
+//   grip up    (toward X button) = reported +x
+//   grip right (toward A button) = reported -y
+func handleStick(_ x: Float, _ y: Float) {
+    let up = x
+    let right = -y
+    if abs(up) < 0.4 && abs(right) < 0.4 {
         repeater.release()
+        return
+    }
+    if abs(up) >= abs(right) {
+        if up > 0.6 { repeater.press(KEY_UP) }
+        else if up < -0.6 { repeater.press(KEY_DOWN) }
+    } else {
+        if right > 0.6 { repeater.press(KEY_RIGHT) }
+        else if right < -0.6 { repeater.press(KEY_LEFT) }
     }
 }
 
@@ -167,10 +182,10 @@ func bindAction(_ button: GCControllerButtonInput?, _ label: String, _ action: @
     }
 }
 
-func bindVertical(_ dpad: GCControllerDirectionPad?, _ label: String) {
+func bindStick(_ dpad: GCControllerDirectionPad?, _ label: String) {
     dpad?.valueChangedHandler = { _, x, y in
         if debug { print("[debug] \(label) x=\(x) y=\(y)") }
-        handleVertical(y)
+        handleStick(x, y)
     }
 }
 
@@ -195,9 +210,9 @@ func wire(_ controller: GCController) {
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
 
-    bindVertical(profile.dpads[GCInputDirectionPad], "DirectionPad")
-    bindVertical(profile.dpads[GCInputLeftThumbstick], "LeftStick")
-    bindVertical(profile.dpads[GCInputRightThumbstick], "RightStick")
+    bindStick(profile.dpads[GCInputDirectionPad], "DirectionPad")
+    bindStick(profile.dpads[GCInputLeftThumbstick], "LeftStick")
+    bindStick(profile.dpads[GCInputRightThumbstick], "RightStick")
 }
 
 // MARK: - Main

@@ -10,7 +10,7 @@ Built for driving voice dictation and Claude Code option menus from the couch.
 
 | Joy-Con                | Key         | Purpose                        |
 |------------------------|-------------|--------------------------------|
-| Stick / d-pad up-down  | ↑ / ↓       | Move through options (repeats) |
+| Stick (vertical grip)  | ↑↓←→ arrows | Up = toward X button (repeats) |
 | A                      | Return      | Confirm                        |
 | B                      | Escape      | Cancel / interrupt             |
 | X                      | `1`         | Pick option 1 directly         |
