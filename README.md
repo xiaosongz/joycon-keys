@@ -7,7 +7,7 @@ A tiny menu-bar app, pure Swift, zero dependencies. It shows a live drawing
 of your Joy-Con; click any button on it (or in the list), press a keyboard
 combo, and the mapping applies instantly.
 
-![Joy-Con rendering](docs/joycon-pair.png)
+![Mapping editor — click any button, press a combo, done](docs/app-window.png)
 
 ## Features
 
