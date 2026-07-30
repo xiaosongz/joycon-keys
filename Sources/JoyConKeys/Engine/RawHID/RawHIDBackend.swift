@@ -20,6 +20,17 @@ final class RawHIDBackend: InputBackend {
         /// How far the SPI calibration handshake has got. The two reads are
         /// chained rather than fired together — see requestCalibration().
         var calStage: CalStage = .idle
+        /// Bounded retry for the SPI calibration handshake — same rationale
+        /// as modeSetTimer: a read fired into the post-mode-set drop window
+        /// can be silently ignored, so a missing reply must not permanently
+        /// foreclose calibration (I1). Re-issues whichever stage's read is
+        /// current; capped by calAttempts.
+        var calTimer: DispatchSourceTimer?
+        var calAttempts = 0
+        /// One-shot gate so a persistent SPIReadReply.parse failure on a
+        /// 0x21 report logs once per device instead of not at all — this
+        /// silent-failure path must become visible (M2/I-2).
+        var loggedParseFailure = false
         var packetCounter: UInt8 = 0
         /// Polls the 0x03 0x30 mode-set subcommand until the first 0x30
         /// report proves the Joy-Con actually switched modes (see attach()).
@@ -91,6 +102,8 @@ final class RawHIDBackend: InputBackend {
             for (dev, d) in devices {
                 d.modeSetTimer?.cancel()
                 d.modeSetTimer = nil
+                d.calTimer?.cancel()
+                d.calTimer = nil
                 IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
                 IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
             }
@@ -144,6 +157,8 @@ final class RawHIDBackend: InputBackend {
         guard let d = devices.removeValue(forKey: dev) else { return }
         d.modeSetTimer?.cancel()
         d.modeSetTimer = nil
+        d.calTimer?.cancel()
+        d.calTimer = nil
         IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
         IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
         for b in d.previous { notifyMain { $0.backendButton(b, pressed: false) } }
@@ -217,28 +232,48 @@ final class RawHIDBackend: InputBackend {
     /// at `.fallback`, so a dropped or unreadable block only costs some stick
     /// scaling accuracy — the Joy-Con still works.
     private func handleSubcommandReply(_ d: Device, _ data: [UInt8]) {
-        guard let reply = SPIReadReply.parse(data) else { return }
+        guard let reply = SPIReadReply.parse(data) else {
+            // Made visible once per device (M2/I-2): if this genuinely was a
+            // subcommand-reply report and we still couldn't parse it, that
+            // silent-failure path needs a trace, not just a dropped read.
+            if !d.loggedParseFailure, data.first == 0x21 {
+                d.loggedParseFailure = true
+                NSLog("[joycon-keys] raw %@ SPIReadReply.parse returned nil for a 0x21 report", d.name)
+            }
+            return
+        }
 
         if reply.address == Self.factoryCalAddress(d.side) {
             // Stage-gated so a duplicate factory reply can neither re-issue
             // the user read nor overwrite user calibration already installed.
             guard d.calStage == .factory else { return }
+            // A truncated reply must NOT advance the stage or cancel the
+            // retry timer — leaving calStage at .factory lets the timer
+            // re-issue the read instead of burning the one factory chance
+            // on a partial payload (MINOR-3).
+            guard reply.payload.count >= 9 else { return }
             install(reply.payload, on: d, kind: "factory")
             // Chain, don't batch: the user block overrides factory when its
             // magic is set, but issuing it only now means a lost reply leaves
             // the (already correct) factory values in place.
             d.calStage = .user
-            sendSubcommand(d, 0x10, Self.spiArgs(Self.userCalAddress(d.side), 11))
+            requestCalibration(d)
         } else if reply.address == Self.userCalAddress(d.side) {
             // Magic 0xB2A1, stored little-endian (A1 B2), marks the block as
             // written; without it the 9 bytes behind it are erased flash.
             guard reply.payload.count >= 11,
-                  reply.payload[0] == 0xA1, reply.payload[1] == 0xB2 else { return }
+                  Self.hasUserCalibrationMagic(reply.payload) else { return }
             install(Array(reply.payload[2...]), on: d, kind: "user")
         }
     }
 
     private func install(_ spi: [UInt8], on d: Device, kind: String) {
+        // The stage's reply has landed (a full-length reply for the address
+        // we're waiting on) — stop retrying it regardless of whether decode
+        // below succeeds; retrying an undecodable block can't produce a
+        // different answer since the SPI bytes are static.
+        d.calTimer?.cancel()
+        d.calTimer = nil
         guard let cal = StickCalibration.decode(spi: spi, side: d.side) else { return }
         d.calibration = cal
         if debug { NSLog("[debug] raw %@ %@ stick calibration loaded", d.name, kind) }
@@ -248,30 +283,83 @@ final class RawHIDBackend: InputBackend {
 
     /// Factory stick calibration sits at 0x603D (left) / 0x6046 (right), 9
     /// bytes in the layout StickCalibration.decode expects.
-    private static func factoryCalAddress(_ side: JoyConSide) -> UInt32 {
+    /// Internal (not private), with `spiArgs`/`userCalAddress` below, so the
+    /// riskiest hand-transcribed protocol constants are unit-testable
+    /// (MINOR-4).
+    nonisolated static func factoryCalAddress(_ side: JoyConSide) -> UInt32 {
         side == .left ? 0x603D : 0x6046
     }
 
     /// User calibration at 0x8010 (left) / 0x801B (right): a 2-byte 0xB2A1
     /// magic followed by the same 9-byte layout — 11 bytes read as one block.
-    private static func userCalAddress(_ side: JoyConSide) -> UInt32 {
+    nonisolated static func userCalAddress(_ side: JoyConSide) -> UInt32 {
         side == .left ? 0x8010 : 0x801B
     }
 
-    private static func spiArgs(_ address: UInt32, _ length: UInt8) -> [UInt8] {
+    nonisolated static func spiArgs(_ address: UInt32, _ length: UInt8) -> [UInt8] {
         [UInt8(address & 0xFF), UInt8((address >> 8) & 0xFF),
          UInt8((address >> 16) & 0xFF), UInt8((address >> 24) & 0xFF), length]
     }
 
-    /// Starts the calibration handshake with the factory block; the user
-    /// block follows from its reply (see handleSubcommandReply). Sending both
-    /// at once risks the second being dropped — the same "subcommand sent too
-    /// eagerly is silently ignored" behavior that forced the mode-set retry.
-    private func requestCalibration(_ d: Device) {
-        sendSubcommand(d, 0x10, Self.spiArgs(Self.factoryCalAddress(d.side), 9))
+    /// True when `payload` begins with the little-endian 0xB2A1 user-block
+    /// write marker. Byte order matters: the marker is stored on the wire as
+    /// A1 B2, not B2 A1 — a swap here would silently reject every written
+    /// user calibration block.
+    nonisolated static func hasUserCalibrationMagic(_ payload: [UInt8]) -> Bool {
+        payload.count >= 2 && payload[0] == 0xA1 && payload[1] == 0xB2
     }
 
-    private func sendSubcommand(_ d: Device, _ subcommand: UInt8, _ args: [UInt8]) {
+    /// Issues the SPI read for whichever stage `d.calStage` is currently at
+    /// (factory first, then user once the factory reply installs — see
+    /// handleSubcommandReply), and arms a bounded 1.0 s retry timer the first
+    /// time a read is outstanding for that stage.
+    ///
+    /// Sending the factory and user reads back-to-back risks the second being
+    /// dropped — the same "subcommand sent too eagerly is silently ignored"
+    /// behavior that forced the mode-set retry — so they're chained instead
+    /// of batched. And a single unanswered read must not permanently foreclose
+    /// calibration (I1): the retry timer re-issues the CURRENT stage's read
+    /// up to 5 times, then gives up silently (fallback calibration keeps the
+    /// stick working either way).
+    private func requestCalibration(_ d: Device) {
+        let address: UInt32
+        let length: UInt8
+        switch d.calStage {
+        case .idle: return
+        case .factory: address = Self.factoryCalAddress(d.side); length = 9
+        case .user: address = Self.userCalAddress(d.side); length = 11
+        }
+        let result = sendSubcommand(d, 0x10, Self.spiArgs(address, length))
+        guard result == kIOReturnSuccess else {
+            // The send itself failed — fall back rather than retry into a
+            // device that may be disappearing; detach() cleans up the timer
+            // if that's why the send failed.
+            d.calStage = .idle
+            d.calTimer?.cancel()
+            d.calTimer = nil
+            return
+        }
+        guard d.calTimer == nil else { return }  // a retry timer is already running for this stage
+        d.calAttempts = 0
+        let dev = d.device
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            guard let self, let d = self.devices[dev] else { return }
+            d.calAttempts += 1
+            guard d.calAttempts < 5 else {
+                d.calTimer?.cancel()
+                d.calTimer = nil
+                return
+            }
+            self.requestCalibration(d)
+        }
+        d.calTimer = timer
+        timer.resume()
+    }
+
+    @discardableResult
+    private func sendSubcommand(_ d: Device, _ subcommand: UInt8, _ args: [UInt8]) -> IOReturn {
         var packet: [UInt8] = [d.packetCounter]
         d.packetCounter = (d.packetCounter + 1) & 0x0F
         packet += [0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40]  // neutral rumble
@@ -282,6 +370,7 @@ final class RawHIDBackend: InputBackend {
         if r != kIOReturnSuccess {
             NSLog("[joycon-keys] raw subcommand 0x%02X failed 0x%X", subcommand, r)
         }
+        return r
     }
 
     private func notifyMain(_ body: @escaping (BackendDelegate) -> Void) {

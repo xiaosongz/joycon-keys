@@ -38,7 +38,11 @@ final class ControllerEngine: ObservableObject, BackendDelegate {
     func applyBackendPreference() {
         let wantRaw = UserDefaults.standard.bool(forKey: AppDefaults.useRawHIDKey)
         let canRaw = wantRaw && RawHIDBackend.accessGranted()
-        rawHIDDenied = wantRaw && !canRaw
+        // Settings calls this on every activation; only actually publish
+        // when the value changes, or @Published fires objectWillChange for
+        // no-op re-sets and floods SwiftUI with invalidations (MINOR-1).
+        let denied = wantRaw && !canRaw
+        if rawHIDDenied != denied { rawHIDDenied = denied }
         // With no backend yet (first launch) both casts are false, so this
         // reads as "needs swap" either way.
         let needsSwap = canRaw ? !(backend is RawHIDBackend) : !(backend is GCBackend)
