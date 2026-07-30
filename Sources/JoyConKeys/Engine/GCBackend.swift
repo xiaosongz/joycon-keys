@@ -40,9 +40,13 @@ final class GCBackend: InputBackend {
         for controller in wiredControllers {
             let p = controller.physicalInputProfile
             for button in p.buttons.values { button.pressedChangedHandler = nil }
-            for dpad in p.dpads.values { dpad.valueChangedHandler = nil }
+            for dpad in p.dpads.values {
+                dpad.valueChangedHandler = nil
+                for b in [dpad.up, dpad.down, dpad.left, dpad.right] { b.pressedChangedHandler = nil }
+            }
         }
         wiredControllers.removeAll()
+        delegate = nil
     }
 
     static func side(of controller: GCController) -> JoyConSide {
