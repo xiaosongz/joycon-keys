@@ -30,7 +30,11 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
         case .triggerRight: return "ZR"
         case .home: return "Home"
         case .capture: return "Capture"
-        case .menu, .options: return side == .left ? "−" : "+"
+        // GameController: Button Menu = +, Button Options = −. Which one a
+        // single Joy-Con (L) fires for its − is unverified on hardware;
+        // both rows are editable so either way the user can rebind it.
+        case .menu: return "+"
+        case .options: return "−"
         case .stickUp: return "Stick ↑"
         case .stickDown: return "Stick ↓"
         case .stickLeft: return "Stick ←"
@@ -44,8 +48,12 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
             .buttonX, .buttonB, .buttonY, .buttonA,
             .stickUp, .stickDown, .stickLeft, .stickRight,
             .shoulderLeft, .shoulderRight,
+            // ZL/ZR are the only shoulders a combined pair reports —
+            // they must be rebindable even though a single Joy-Con
+            // never fires them.
+            .triggerLeft, .triggerRight,
             side == .left ? .capture : .home,
-            .menu,
+            .menu, .options,
         ]
     }
 }

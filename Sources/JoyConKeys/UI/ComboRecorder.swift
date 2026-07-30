@@ -30,7 +30,7 @@ final class ComboRecorder: ObservableObject {
         heldModifiers = []
         // A menu-bar (LSUIElement) app may not own key focus; without it the
         // local monitor never fires and the recorder looks dead.
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
             // NSEvent.ModifierFlags and CGEventFlags agree in the
@@ -65,5 +65,9 @@ final class ComboRecorder: ObservableObject {
         monitor = nil
         recordingButton = nil
         heldModifiers = []
+    }
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 }

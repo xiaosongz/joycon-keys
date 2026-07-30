@@ -48,8 +48,8 @@ Requires macOS 15+ and a Swift 6 toolchain (Xcode **or** just the Command
 Line Tools — no Xcode project involved).
 
 ```sh
-git clone <this repo> && cd joycon-keys
-scripts/build-app.sh          # → dist/JoyConKeys.app
+git clone https://github.com/xiaosongz/joycon-keys.git && cd joycon-keys
+scripts/build-app.sh          # → dist/JoyConKeys.app (ad-hoc signed)
 cp -R dist/JoyConKeys.app /Applications/
 open /Applications/JoyConKeys.app
 ```
@@ -70,18 +70,23 @@ LaunchAgent (survives crashes via `KeepAlive`):
 
 ```sh
 cp scripts/launchagent.plist ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist
-# edit the executable path inside, then:
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist
 ```
 
 launchd refuses to exec binaries on external volumes — keep the app on the
 boot disk.
 
+The agent logs to `/tmp/joycon-keys.log` (the maintainer's `deploy.sh`
+repoints it to `~/Library/Logs/joycon-keys.log`). Check it first when keys
+don't arrive: the startup line `accessibility trusted: yes/NO` is the only
+visible symptom of a missing permission, because macOS drops synthetic
+events silently.
+
 ### Re-building without losing the Accessibility grant
 
 macOS keys the permission to the app's code-signing identity. Ad-hoc signing
-(`SIGN_IDENTITY=-`) changes identity every build, so the grant dies each
-time — you must *delete* the stale entry (−) in System Settings and re-add;
+(the default) changes identity every build, so the grant dies each time —
+you must *delete* the stale entry (−) in System Settings and re-add;
 re-toggling does nothing. To keep the grant across rebuilds, sign with any
 persistent certificate (a free self-signed "code signing" cert in Keychain
 Access works) and keep the bundle identifier stable:
@@ -107,7 +112,13 @@ SIGN_IDENTITY=my-cert-name scripts/build-app.sh
   disable it in Steam → Settings → Controller, or quit Steam.
 - **Joy-Con battery level is not exposed** by macOS (`GCController.battery`
   is nil). Dock it on the console to check charge.
+- **Headless screenshots**: `JoyConKeys --render-preview /tmp/out` writes
+  `out-window.png` and `out-pair.png` and exits — how the image above is
+  generated.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Not affiliated with or endorsed by Nintendo. Nintendo Switch and Joy-Con
+are trademarks of Nintendo.

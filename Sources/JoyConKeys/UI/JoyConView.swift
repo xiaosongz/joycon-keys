@@ -111,7 +111,7 @@ struct JoyConView: View {
 
     private func faceL(w: CGFloat, h: CGFloat) -> some View {
         ZStack {
-            plusMinus(.menu, isPlus: false, at: CGPoint(x: w * 0.82, y: h * 0.075), w: w)
+            plusMinus(.options, isPlus: false, at: CGPoint(x: w * 0.82, y: h * 0.075), w: w)
             stick(at: CGPoint(x: w * 0.50, y: h * 0.30), w: w)
             // Direction buttons (reported as A/B/X/Y in the sideways frame).
             face(.buttonX, "▲", at: CGPoint(x: w * 0.46, y: h * 0.475), w: w)

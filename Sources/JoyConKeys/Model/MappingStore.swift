@@ -11,11 +11,20 @@ final class MappingStore: ObservableObject {
     }
 
     static let fileURL: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("JoyConKeys", isDirectory: true)
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let dir = base.appendingPathComponent("JoyConKeys", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("mappings.json")
     }()
+
+    /// A value wrapper whose decode never throws — one corrupt entry must
+    /// not take down every good mapping in the file.
+    private struct LenientAction: Decodable {
+        let action: MappedAction?
+        init(from decoder: Decoder) { action = try? MappedAction(from: decoder) }
+    }
 
     /// The mapping this tool shipped with — tuned for driving Claude Code
     /// menus and dictation from a vertically held Joy-Con (R).
@@ -39,14 +48,25 @@ final class MappingStore: ObservableObject {
     ]
 
     init() {
-        if let data = try? Data(contentsOf: Self.fileURL),
-           let decoded = try? JSONDecoder().decode([String: MappedAction].self, from: data) {
-            var loaded: [PadButton: MappedAction] = [:]
-            for (key, action) in decoded {
-                if let button = PadButton(rawValue: key) { loaded[button] = action }
+        if let data = try? Data(contentsOf: Self.fileURL) {
+            if let decoded = try? JSONDecoder().decode([String: LenientAction].self, from: data) {
+                var loaded: [PadButton: MappedAction] = [:]
+                for (key, lenient) in decoded {
+                    if let button = PadButton(rawValue: key), let action = lenient.action {
+                        loaded[button] = action
+                    }
+                }
+                // New buttons added after the file was written fall back to defaults.
+                mappings = Self.defaults.merging(loaded) { _, saved in saved }
+            } else {
+                // Unparseable file: preserve it before save() overwrites —
+                // silently destroying user mappings is worse than defaults.
+                let backup = Self.fileURL.appendingPathExtension("bak")
+                try? FileManager.default.removeItem(at: backup)
+                try? FileManager.default.copyItem(at: Self.fileURL, to: backup)
+                NSLog("[joycon-keys] mappings.json unreadable — reset to defaults, original kept at %@", backup.path)
+                mappings = Self.defaults
             }
-            // New buttons added after the file was written fall back to defaults.
-            mappings = Self.defaults.merging(loaded) { _, saved in saved }
         } else {
             mappings = Self.defaults
         }
@@ -69,8 +89,11 @@ final class MappingStore: ObservableObject {
         let byKey = Dictionary(uniqueKeysWithValues: mappings.map { ($0.key.rawValue, $0.value) })
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(byKey) {
-            try? data.write(to: Self.fileURL, options: .atomic)
+        do {
+            let data = try encoder.encode(byKey)
+            try data.write(to: Self.fileURL, options: .atomic)
+        } catch {
+            NSLog("[joycon-keys] failed to persist mappings: %@", String(describing: error))
         }
     }
 }

@@ -4,13 +4,20 @@ import Foundation
 /// Synthesizes keyboard events via CGEvent. Requires Accessibility permission.
 ///
 /// Hard-won rules (see git history of the CLI version):
-/// - Modifier flags go on key-DOWN only; a key-up carrying flags latches the
-///   modifier system-wide.
+/// - Each event carries only the modifier flags still physically held at
+///   that instant; a key-up carrying an already-released modifier's flag
+///   latches it system-wide.
 /// - Fn has no ordinary key events — it must be posted as flagsChanged
 ///   (vk 63) with the flag set on press and CLEARED on release.
 /// - Hotkey listeners are happiest when modifiers arrive as real key events
 ///   pressed in order and released in reverse, like human fingers.
 enum KeySynth {
+    /// Synthesis sleeps (up to 200 ms for double-Control) run here, off the
+    /// main thread — GameController handlers and the stick repeat timer are
+    /// main-queue and must not stall behind a usleep. Serial, so overlapping
+    /// presses can't interleave their modifier sequences.
+    private static let queue = DispatchQueue(label: "joyconkeys.synth", qos: .userInteractive)
+
     private static let modifierKeys: [(Modifiers, CGKeyCode)] = [
         (.control, 59), (.option, 58), (.shift, 56), (.command, 55),
     ]
@@ -85,10 +92,12 @@ enum KeySynth {
     }
 
     static func perform(_ action: MappedAction) {
-        switch action {
-        case .combo(let c): post(c)
-        case .doubleControl: postDoubleControl()
-        case .unassigned: break
+        queue.async {
+            switch action {
+            case .combo(let c): post(c)
+            case .doubleControl: postDoubleControl()
+            case .unassigned: break
+            }
         }
     }
 }

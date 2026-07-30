@@ -45,7 +45,11 @@ enum PreviewRender {
             print("render failed: \(path)")
             return
         }
-        try? png.write(to: URL(fileURLWithPath: path))
-        print("wrote \(path)")
+        do {
+            try png.write(to: URL(fileURLWithPath: path))
+            print("wrote \(path)")
+        } catch {
+            print("write failed: \(path): \(error)")
+        }
     }
 }

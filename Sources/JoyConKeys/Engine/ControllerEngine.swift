@@ -22,24 +22,32 @@ final class ControllerEngine: ObservableObject {
 
     private let store: MappingStore
     private let repeater = Repeater()
+    /// Which dpad currently owns the digital stick direction — so centering
+    /// one stick can't cancel a repeat the *other* stick is driving.
+    private var activeStick: ObjectIdentifier?
+    private var observers: [NSObjectProtocol] = []
 
     init(store: MappingStore) {
         self.store = store
-        NotificationCenter.default.addObserver(
+        observers.append(NotificationCenter.default.addObserver(
             forName: .GCControllerDidConnect, object: nil, queue: .main
         ) { [weak self] note in
             guard let c = note.object as? GCController else { return }
             MainActor.assumeIsolated { self?.wire(c) }
-        }
-        NotificationCenter.default.addObserver(
+        })
+        observers.append(NotificationCenter.default.addObserver(
             forName: .GCControllerDidDisconnect, object: nil, queue: .main
         ) { [weak self] note in
             guard let c = note.object as? GCController else { return }
             MainActor.assumeIsolated { self?.unwire(c) }
-        }
+        })
         GCController.shouldMonitorBackgroundEvents = true
         GCController.startWirelessControllerDiscovery()
         for c in GCController.controllers() { wire(c) }
+    }
+
+    deinit {
+        for token in observers { NotificationCenter.default.removeObserver(token) }
     }
 
     static func side(of controller: GCController) -> JoyConSide {
@@ -50,6 +58,10 @@ final class ControllerEngine: ObservableObject {
     }
 
     private func wire(_ controller: GCController) {
+        // The framework default is already the main queue, but every
+        // MainActor.assumeIsolated below TRAPS if that ever changes — pin it.
+        // Must be set before handlers are configured (GCDevicePhysicalInput).
+        controller.handlerQueue = .main
         let side = Self.side(of: controller)
         let entry = Connected(
             id: ObjectIdentifier(controller), side: side,
@@ -96,8 +108,13 @@ final class ControllerEngine: ObservableObject {
 
     private func unwire(_ controller: GCController) {
         connected.removeAll { $0.id == ObjectIdentifier(controller) }
-        repeater.release()
-        pressed.removeAll()
+        // Only wipe live input state when nothing is left — another
+        // still-connected controller may be mid-press or mid-repeat.
+        if connected.isEmpty {
+            repeater.release()
+            pressed.removeAll()
+            activeStick = nil
+        }
         NSLog("[joycon-keys] disconnected: %@", controller.vendorName ?? "controller")
     }
 
@@ -129,7 +146,9 @@ final class ControllerEngine: ObservableObject {
     ///   Joy-Con (L): grip up = reported -x, grip right = reported +y
     /// Anything else (combined pair, Pro Controller) is already upright.
     private func bindStick(_ dpad: GCControllerDirectionPad?, side: JoyConSide) {
-        dpad?.valueChangedHandler = { [weak self] _, x, y in
+        guard let dpad else { return }
+        let stick = ObjectIdentifier(dpad)
+        dpad.valueChangedHandler = { [weak self] _, x, y in
             guard let self else { return }
             let (up, right): (Float, Float)
             switch side {
@@ -137,15 +156,19 @@ final class ControllerEngine: ObservableObject {
             case .left: (up, right) = (-x, y)
             case .other: (up, right) = (y, x)
             }
-            MainActor.assumeIsolated { self.handleStick(up: up, right: right) }
+            MainActor.assumeIsolated { self.handleStick(stick, up: up, right: right) }
         }
     }
 
     /// Stick-to-digital with hysteresis: engage past 0.6, release inside
-    /// 0.4; the dominant axis wins so diagonals don't flicker.
-    private func handleStick(up: Float, right: Float) {
+    /// 0.4; the dominant axis wins so diagonals don't flicker. Only the
+    /// stick that engaged a direction may release it — a second stick
+    /// centering must not cancel the first one's auto-repeat.
+    private func handleStick(_ stick: ObjectIdentifier, up: Float, right: Float) {
         let dirs: Set<PadButton> = [.stickUp, .stickDown, .stickLeft, .stickRight]
         if abs(up) < 0.4 && abs(right) < 0.4 {
+            guard activeStick == nil || activeStick == stick else { return }
+            activeStick = nil
             repeater.release()
             pressed.subtract(dirs)
             return
@@ -157,6 +180,7 @@ final class ControllerEngine: ObservableObject {
             if right > 0.6 { dir = .stickRight } else if right < -0.6 { dir = .stickLeft }
         }
         guard let dir else { return }
+        activeStick = stick
         pressed.subtract(dirs.subtracting([dir]))
         pressed.insert(dir)
         repeater.press(dir) { [weak self] in
@@ -189,5 +213,10 @@ final class Repeater {
         timer?.cancel()
         timer = nil
         active = nil
+    }
+
+    deinit {
+        // Deallocating a resumed-but-uncancelled DispatchSource traps.
+        timer?.cancel()
     }
 }

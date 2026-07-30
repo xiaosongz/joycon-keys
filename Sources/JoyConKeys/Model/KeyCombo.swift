@@ -2,8 +2,9 @@ import CoreGraphics
 import Foundation
 
 /// Modifier set for a recorded shortcut. Raw values are stable — they are
-/// what gets persisted to mappings.json, so never renumber.
-struct Modifiers: OptionSet, Codable, Hashable {
+/// what gets persisted to mappings.json (via MappedAction's custom coder,
+/// which round-trips rawValue directly), so never renumber.
+struct Modifiers: OptionSet, Hashable {
     let rawValue: Int
 
     static let control = Modifiers(rawValue: 1 << 0)
@@ -46,7 +47,7 @@ struct Modifiers: OptionSet, Codable, Hashable {
 }
 
 /// A keyboard shortcut: one non-modifier key plus modifiers.
-struct KeyCombo: Codable, Hashable {
+struct KeyCombo: Hashable {
     var keyCode: UInt16
     var modifiers: Modifiers
 
