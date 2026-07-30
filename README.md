@@ -11,7 +11,7 @@ combo, and the mapping applies instantly.
 
 ## Features
 
-- **Live visualization** — neon-blue (L) / neon-red (R) Joy-Con rendered in
+- **Live visualization** — neon-red (L) / neon-blue (R) Joy-Con rendered in
   vector; buttons light up as you press them, the stick cap moves.
 - **Click-to-record mapping** — click a button, press `⌃⌥⌘D` (or anything),
   done. Mappings persist in

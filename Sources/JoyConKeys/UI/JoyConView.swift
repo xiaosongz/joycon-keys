@@ -19,8 +19,10 @@ struct JoyConView: View {
     static let buttonOnBlue = Color(red: 0.0, green: 0.118, blue: 0.118) // #001E1E
     static let buttonOnRed = Color(red: 0.118, green: 0.039, blue: 0.039) // #1E0A0A
 
-    private var shellColor: Color { side == .left ? Self.neonBlue : Self.neonRed }
-    private var buttonColor: Color { side == .left ? Self.buttonOnBlue : Self.buttonOnRed }
+    // This pair is the neon-red-L / neon-blue-R set (the launch neon pair is
+    // the opposite). Matches the owner's hardware.
+    private var shellColor: Color { side == .left ? Self.neonRed : Self.neonBlue }
+    private var buttonColor: Color { side == .left ? Self.buttonOnRed : Self.buttonOnBlue }
 
     var body: some View {
         GeometryReader { geo in
