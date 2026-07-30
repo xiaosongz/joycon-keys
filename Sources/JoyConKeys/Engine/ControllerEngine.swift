@@ -1,0 +1,168 @@
+import Combine
+import Foundation
+import GameController
+
+/// Connects to Joy-Con via the GameController framework, fires mapped
+/// actions, and publishes connection + pressed state for the UI.
+///
+/// A single Joy-Con exposes NO extendedGamepad profile on macOS — only
+/// physicalInputProfile with Button A/B/X/Y, Home (R) / Share (L), Menu,
+/// Direction Pad (the stick), and Left/Right Shoulder (= SL/SR). A combined
+/// pair reports ZL/ZR as triggers instead and loses SL/SR (SDL issue #6095).
+@MainActor
+final class ControllerEngine: ObservableObject {
+    struct Connected: Identifiable, Equatable {
+        let id: ObjectIdentifier
+        let side: JoyConSide
+        let name: String
+    }
+
+    @Published private(set) var connected: [Connected] = []
+    @Published private(set) var pressed: Set<PadButton> = []
+
+    private let store: MappingStore
+    private let repeater = Repeater()
+
+    init(store: MappingStore) {
+        self.store = store
+        NotificationCenter.default.addObserver(
+            forName: .GCControllerDidConnect, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let c = note.object as? GCController else { return }
+            MainActor.assumeIsolated { self?.wire(c) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .GCControllerDidDisconnect, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let c = note.object as? GCController else { return }
+            MainActor.assumeIsolated { self?.unwire(c) }
+        }
+        GCController.shouldMonitorBackgroundEvents = true
+        GCController.startWirelessControllerDiscovery()
+        for c in GCController.controllers() { wire(c) }
+    }
+
+    static func side(of controller: GCController) -> JoyConSide {
+        let name = controller.vendorName ?? ""
+        if name.contains("(L)") { return .left }
+        if name.contains("(R)") { return .right }
+        return .other
+    }
+
+    private func wire(_ controller: GCController) {
+        let side = Self.side(of: controller)
+        let entry = Connected(
+            id: ObjectIdentifier(controller), side: side,
+            name: controller.vendorName ?? "Controller")
+        connected.removeAll { $0.id == entry.id }
+        connected.append(entry)
+        NSLog("[joycon-keys] wired: %@ (%@)", entry.name, side.rawValue)
+
+        let p = controller.physicalInputProfile
+        bind(p.buttons[GCInputButtonA], .buttonA)
+        bind(p.buttons[GCInputButtonB], .buttonB)
+        bind(p.buttons[GCInputButtonX], .buttonX)
+        bind(p.buttons[GCInputButtonY], .buttonY)
+        bind(p.buttons[GCInputLeftShoulder], .shoulderLeft)
+        bind(p.buttons[GCInputRightShoulder], .shoulderRight)
+        bind(p.buttons[GCInputLeftTrigger], .triggerLeft)
+        bind(p.buttons[GCInputRightTrigger], .triggerRight)
+        bind(p.buttons[GCInputButtonHome], .home)
+        bind(p.buttons[GCInputButtonShare], .capture)
+        bind(p.buttons[GCInputButtonMenu], .menu)
+        bind(p.buttons[GCInputButtonOptions], .options)
+
+        bindStick(p.dpads[GCInputDirectionPad], side: side)
+        bindStick(p.dpads[GCInputLeftThumbstick], side: side)
+        bindStick(p.dpads[GCInputRightThumbstick], side: side)
+    }
+
+    private func unwire(_ controller: GCController) {
+        connected.removeAll { $0.id == ObjectIdentifier(controller) }
+        repeater.release()
+        pressed.removeAll()
+        NSLog("[joycon-keys] disconnected: %@", controller.vendorName ?? "controller")
+    }
+
+    private func bind(_ button: GCControllerButtonInput?, _ id: PadButton) {
+        button?.pressedChangedHandler = { [weak self] _, _, isPressed in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                if isPressed {
+                    self.pressed.insert(id)
+                    KeySynth.perform(self.store.action(for: id))
+                } else {
+                    self.pressed.remove(id)
+                }
+            }
+        }
+    }
+
+    /// Vertical-grip axis remap. macOS reports single-Joy-Con axes in the
+    /// SIDEWAYS grip frame (rail up, stick left of the face buttons):
+    ///   Joy-Con (R): grip up = reported +x, grip right = reported -y
+    ///   Joy-Con (L): grip up = reported -x, grip right = reported +y
+    /// Anything else (combined pair, Pro Controller) is already upright.
+    private func bindStick(_ dpad: GCControllerDirectionPad?, side: JoyConSide) {
+        dpad?.valueChangedHandler = { [weak self] _, x, y in
+            guard let self else { return }
+            let (up, right): (Float, Float)
+            switch side {
+            case .right: (up, right) = (x, -y)
+            case .left: (up, right) = (-x, y)
+            case .other: (up, right) = (y, x)
+            }
+            MainActor.assumeIsolated { self.handleStick(up: up, right: right) }
+        }
+    }
+
+    /// Stick-to-digital with hysteresis: engage past 0.6, release inside
+    /// 0.4; the dominant axis wins so diagonals don't flicker.
+    private func handleStick(up: Float, right: Float) {
+        let dirs: Set<PadButton> = [.stickUp, .stickDown, .stickLeft, .stickRight]
+        if abs(up) < 0.4 && abs(right) < 0.4 {
+            repeater.release()
+            pressed.subtract(dirs)
+            return
+        }
+        var dir: PadButton?
+        if abs(up) >= abs(right) {
+            if up > 0.6 { dir = .stickUp } else if up < -0.6 { dir = .stickDown }
+        } else {
+            if right > 0.6 { dir = .stickRight } else if right < -0.6 { dir = .stickLeft }
+        }
+        guard let dir else { return }
+        pressed.subtract(dirs.subtracting([dir]))
+        pressed.insert(dir)
+        repeater.press(dir) { [weak self] in
+            guard let self else { return }
+            KeySynth.perform(self.store.action(for: dir))
+        }
+    }
+}
+
+/// Fires an action immediately, then auto-repeats it while held
+/// (400 ms delay, then every 120 ms) — keyboard-style repeat for the stick.
+@MainActor
+final class Repeater {
+    private var timer: DispatchSourceTimer?
+    private(set) var active: PadButton?
+
+    func press(_ id: PadButton, _ fire: @escaping @MainActor () -> Void) {
+        guard active != id else { return }
+        release()
+        active = id
+        fire()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 0.40, repeating: 0.12)
+        t.setEventHandler { MainActor.assumeIsolated { fire() } }
+        t.resume()
+        timer = t
+    }
+
+    func release() {
+        timer?.cancel()
+        timer = nil
+        active = nil
+    }
+}
