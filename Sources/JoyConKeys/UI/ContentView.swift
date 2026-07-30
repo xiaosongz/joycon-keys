@@ -52,8 +52,19 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 580)
-        .onAppear { snapToConnected() }
+        .onAppear {
+            snapToConnected()
+            // LSUIElement apps don't activate on launch; when the window
+            // was opened by "start minimized: off" it would otherwise
+            // appear buried behind whatever restored at login.
+            NSApp.activate()
+        }
         .onChange(of: connectedSides) { snapToConnected() }
+        // Leaving the mapping view must disarm the recorder — its NSEvent
+        // monitor would otherwise swallow the next keystroke and bind it
+        // to a now-invisible button. (No snapToConnected() here: it would
+        // bounce an explicit click on a disconnected side straight back.)
+        .onChange(of: tab) { recorder.cancel() }
         .onDisappear { recorder.cancel() }
     }
 
@@ -86,7 +97,9 @@ struct ContentView: View {
             Picker("", selection: $tab) {
                 Text("Left").tag(Tab.left)
                 Text("Right").tag(Tab.right)
-                Image(systemName: "gearshape").tag(Tab.settings)
+                Image(systemName: "gearshape")
+                    .accessibilityLabel("Settings")
+                    .tag(Tab.settings)
             }
             .pickerStyle(.segmented)
             .frame(width: 200)

@@ -6,16 +6,21 @@ import SwiftUI
 struct SettingsPane: View {
     /// Read in JoyConKeysApp at scene construction — window suppression is
     /// decided once per launch, so changes apply on the next start.
-    @AppStorage("startMinimized") private var startMinimized = true
+    @AppStorage(AppDefaults.startMinimizedKey) private var startMinimized = AppDefaults.startMinimizedDefault
 
     /// SMAppService is the source of truth; this mirrors it for the Toggle.
-    @State private var startAtLogin = SMAppService.mainApp.status == .enabled
+    /// Deliberately NOT initialized from SMAppService here: a @State default
+    /// expression re-evaluates on every struct init (one blocking BTM daemon
+    /// query per Joy-Con input event while this tab is open). onAppear owns
+    /// the initial read — the pane sits in an `if` branch, so its state
+    /// resets each time the tab is entered.
+    @State private var startAtLogin = false
     @State private var loginError: String?
 
-    /// A KeepAlive LaunchAgent (deploy.sh / README) already owns startup on
-    /// this machine. It also makes SMAppService.mainApp report .enabled
-    /// (its BTM record covers the app bundle), so the toggle would both
-    /// mislead and race a second instance — disable it instead.
+    /// A KeepAlive LaunchAgent (README › Start at login) already owns
+    /// startup on this machine. It also makes SMAppService.mainApp report
+    /// .enabled (its BTM record covers the app bundle), so the toggle would
+    /// both mislead and race a second instance — disable it instead.
     private var launchAgentInstalled: Bool {
         FileManager.default.fileExists(
             atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.xiaosong.joycon-keys.plist")
@@ -24,8 +29,12 @@ struct SettingsPane: View {
     var body: some View {
         Form {
             Section("Startup") {
-                Toggle("Start at login", isOn: $startAtLogin)
-                    .onChange(of: startAtLogin) { applyLoginItem() }
+                // Action lives in the binding's setter — an .onChange
+                // observer would re-fire on the failure-path revert and
+                // perform the opposite system call while erasing the error.
+                Toggle("Start at login", isOn: Binding(
+                    get: { startAtLogin },
+                    set: { applyLoginItem(enable: $0) }))
                     .disabled(launchAgentInstalled)
                 if let loginError {
                     Text(loginError)
@@ -51,24 +60,46 @@ struct SettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { startAtLogin = SMAppService.mainApp.status == .enabled }
+        .onAppear { syncFromSystem() }
+        // The user may flip the login item in System Settings while this
+        // pane stays open — refresh whenever the app regains focus.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in syncFromSystem() }
     }
 
-    private func applyLoginItem() {
-        let wantEnabled = startAtLogin
+    private func syncFromSystem() {
+        startAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    private func applyLoginItem(enable: Bool) {
+        // A login item registers the RUNNING bundle's path with an ad-hoc
+        // identity if that's how it was signed — from a build directory
+        // that's a booby trap, not a feature.
+        guard Bundle.main.bundlePath.hasPrefix("/Applications/") else {
+            loginError = "Move the app to /Applications first — a login item would point at \(Bundle.main.bundlePath)."
+            syncFromSystem()
+            return
+        }
         do {
-            if wantEnabled {
+            if enable {
                 try SMAppService.mainApp.register()
             } else {
                 try SMAppService.mainApp.unregister()
             }
             loginError = nil
         } catch {
-            // Revert the toggle — the system state didn't change.
-            startAtLogin = SMAppService.mainApp.status == .enabled
             loginError = "Couldn't update login item: \(error.localizedDescription)"
             NSLog("[joycon-keys] login item %@ failed: %@",
-                  wantEnabled ? "register" : "unregister", String(describing: error))
+                  enable ? "register" : "unregister", String(describing: error))
         }
+        // One source of truth for the toggle on both paths.
+        syncFromSystem()
     }
+}
+
+/// UserDefaults keys shared between the app entry point (which must read
+/// them before any view exists) and the Settings pane.
+enum AppDefaults {
+    static let startMinimizedKey = "startMinimized"
+    static let startMinimizedDefault = true
 }
