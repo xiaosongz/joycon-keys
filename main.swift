@@ -30,6 +30,7 @@ let KEY_DOWN: CGKeyCode = 125
 let KEY_UP: CGKeyCode = 126
 let KEY_1: CGKeyCode = 18
 let KEY_2: CGKeyCode = 19
+let KEY_SPACE: CGKeyCode = 49
 let KEY_CONTROL: CGKeyCode = 59
 
 // MARK: - Key synthesis
@@ -138,13 +139,14 @@ func wire(_ controller: GCController) {
     bind(profile.buttons[GCInputButtonB], "B", KEY_ESCAPE)
     bind(profile.buttons[GCInputButtonX], "X", KEY_1)
     bind(profile.buttons[GCInputButtonY], "Y", KEY_2)
-    // Single Joy-Con reports only SL/SR (as shoulders); a combined pair
-    // reports ZL/ZR (as triggers) instead — see SDL issue #6095. All of
-    // them, plus Home, toggle dictation.
+    // Single Joy-Con reports only SL/SR (as Left/Right Shoulder); a combined
+    // pair reports ZL/ZR (as triggers) instead — see SDL issue #6095.
+    // SL = macOS dictation (synthetic double-Control, the registered hotkey);
+    // SR = synthetic Fn+Space (third-party voice input shortcut).
     bindDictation(profile.buttons[GCInputLeftShoulder], "LeftShoulder")
-    bindDictation(profile.buttons[GCInputRightShoulder], "RightShoulder")
+    bind(profile.buttons[GCInputRightShoulder], "RightShoulder", KEY_SPACE, .maskSecondaryFn)
     bindDictation(profile.buttons[GCInputLeftTrigger], "LeftTrigger")
-    bindDictation(profile.buttons[GCInputRightTrigger], "RightTrigger")
+    bind(profile.buttons[GCInputRightTrigger], "RightTrigger", KEY_SPACE, .maskSecondaryFn)
     bindDictation(profile.buttons[GCInputButtonHome], "Home")
     bind(profile.buttons[GCInputButtonMenu], "Menu", KEY_TAB, .maskShift)
     bind(profile.buttons[GCInputButtonOptions], "Options", KEY_TAB, .maskShift)
