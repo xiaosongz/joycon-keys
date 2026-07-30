@@ -18,10 +18,10 @@ struct ContentView: View {
         return sides
     }
 
-    private var shownSide: JoyConSide {
-        if connectedSides.contains(pickedSide) { return pickedSide }
-        return connectedSides.first ?? pickedSide
-    }
+    // The picker always wins — a disconnected side renders dimmed rather
+    // than being silently swapped for the connected one (that swap made
+    // "Left" show the right Joy-Con whenever the left was charging).
+    private var shownSide: JoyConSide { pickedSide }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,7 +45,17 @@ struct ContentView: View {
             .padding(24)
         }
         .frame(minWidth: 580)
+        .onAppear { snapToConnected() }
+        .onChange(of: connectedSides) { snapToConnected() }
         .onDisappear { recorder.cancel() }
+    }
+
+    /// On connect/disconnect, follow the hardware — but never fight an
+    /// explicit picker click while the connection set is unchanged.
+    private func snapToConnected() {
+        if !connectedSides.isEmpty, !connectedSides.contains(pickedSide) {
+            pickedSide = connectedSides.first!
+        }
     }
 
     private var header: some View {
