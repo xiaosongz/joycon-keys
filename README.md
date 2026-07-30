@@ -22,8 +22,12 @@ combo, and the mapping applies instantly.
   (400 ms delay, then 120 ms interval), with hysteresis so it never jitters.
 - **Special actions** — a button can double-tap Control (the macOS dictation
   shortcut) instead of a plain combo.
-- **Both grips covered** — a single Joy-Con and a combined (L)+(R) pair both
-  work; SL/SR and ZL/ZR are mappable separately.
+- **Never-combined policy** — every Joy-Con is treated as an independent
+  little remote with mirrored mappings. If macOS merges two into a combined
+  "Joy-Con (L/R)" (it does this automatically and it can't be prevented),
+  the app absorbs it: the left half's arrow buttons fire the face-button
+  actions by position, and both sticks act as the stick. Swap controllers
+  whenever one is charging — behavior is identical.
 
 ## Default mapping
 
