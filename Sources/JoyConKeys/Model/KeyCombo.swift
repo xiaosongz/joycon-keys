@@ -72,7 +72,9 @@ struct KeyCombo: Codable, Hashable {
 }
 
 /// What a controller button does when pressed.
-enum MappedAction: Codable, Hashable {
+/// Persisted as {"type": "combo", "keyCode": 2, "modifiers": 11} /
+/// {"type": "doubleControl"} / {"type": "unassigned"}.
+enum MappedAction: Hashable {
     /// Press the combo for ~0.1 s with real modifier key events, then
     /// release everything in reverse order.
     case combo(KeyCombo)
@@ -86,6 +88,38 @@ enum MappedAction: Codable, Hashable {
         case .combo(let c): return c.display
         case .doubleControl: return "⌃⌃ (macOS Dictation)"
         case .unassigned: return "—"
+        }
+    }
+}
+
+extension MappedAction: Codable {
+    private enum CodingKeys: String, CodingKey { case type, keyCode, modifiers }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .type) {
+        case "combo":
+            self = .combo(KeyCombo(
+                keyCode: try c.decode(UInt16.self, forKey: .keyCode),
+                modifiers: Modifiers(rawValue: try c.decode(Int.self, forKey: .modifiers))))
+        case "doubleControl":
+            self = .doubleControl
+        default:
+            self = .unassigned
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .combo(let combo):
+            try c.encode("combo", forKey: .type)
+            try c.encode(combo.keyCode, forKey: .keyCode)
+            try c.encode(combo.modifiers.rawValue, forKey: .modifiers)
+        case .doubleControl:
+            try c.encode("doubleControl", forKey: .type)
+        case .unassigned:
+            try c.encode("unassigned", forKey: .type)
         }
     }
 }

@@ -13,7 +13,9 @@ struct ContentView: View {
 
     private var connectedSides: [JoyConSide] {
         let sides = engine.connected.map(\.side)
-        return sides.isEmpty ? [] : sides
+        // A combined "Joy-Con (L/R)" pair counts as both halves connected.
+        if sides.contains(.other) { return [.left, .right] }
+        return sides
     }
 
     private var shownSide: JoyConSide {

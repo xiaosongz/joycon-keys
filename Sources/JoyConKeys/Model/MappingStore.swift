@@ -50,6 +50,7 @@ final class MappingStore: ObservableObject {
         } else {
             mappings = Self.defaults
         }
+        save()  // materialize the file so users can find and inspect it
     }
 
     func action(for button: PadButton) -> MappedAction {

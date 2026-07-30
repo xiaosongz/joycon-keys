@@ -72,7 +72,24 @@ final class ControllerEngine: ObservableObject {
         bind(p.buttons[GCInputButtonMenu], .menu)
         bind(p.buttons[GCInputButtonOptions], .options)
 
-        bindStick(p.dpads[GCInputDirectionPad], side: side)
+        if side == .other {
+            // Combined "Joy-Con (L/R)": macOS merges both minis into one
+            // controller and we cannot split it, so treat each half as the
+            // SAME mirrored remote instead of a big gamepad. The left
+            // half's arrow buttons arrive as a digital Direction Pad —
+            // mirror them onto the face-button actions by position
+            // (▲=X, ▶=A, ▼=B, ◀=Y), and let both thumbsticks drive the
+            // stick actions (axes are already upright in this mode).
+            if let dpad = p.dpads[GCInputDirectionPad] {
+                bind(dpad.up, .buttonX)
+                bind(dpad.right, .buttonA)
+                bind(dpad.down, .buttonB)
+                bind(dpad.left, .buttonY)
+            }
+        } else {
+            // Single Joy-Con: the Direction Pad IS the analog stick.
+            bindStick(p.dpads[GCInputDirectionPad], side: side)
+        }
         bindStick(p.dpads[GCInputLeftThumbstick], side: side)
         bindStick(p.dpads[GCInputRightThumbstick], side: side)
     }
@@ -84,9 +101,17 @@ final class ControllerEngine: ObservableObject {
         NSLog("[joycon-keys] disconnected: %@", controller.vendorName ?? "controller")
     }
 
+    private let debug = ProcessInfo.processInfo.environment["JOYKEYS_DEBUG"] != nil
+
     private func bind(_ button: GCControllerButtonInput?, _ id: PadButton) {
-        button?.pressedChangedHandler = { [weak self] _, _, isPressed in
+        guard let button else { return }
+        let debug = self.debug
+        button.pressedChangedHandler = { [weak self] element, _, isPressed in
             guard let self else { return }
+            if debug {
+                NSLog("[debug] %@ -> %@ pressed=%d",
+                      element.localizedName ?? "?", id.rawValue, isPressed ? 1 : 0)
+            }
             MainActor.assumeIsolated {
                 if isPressed {
                     self.pressed.insert(id)
