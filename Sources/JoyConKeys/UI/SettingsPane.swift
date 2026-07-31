@@ -193,6 +193,27 @@ struct SettingsPane: View {
                 process.arguments = ["bootout", serviceTarget]
                 try process.run()
                 process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    // bootout also returns nonzero when the job is already
+                    // unloaded. Distinguish that harmless case from a live
+                    // job that actually resisted removal.
+                    let probe = Process()
+                    probe.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                    probe.arguments = ["print", serviceTarget]
+                    probe.standardOutput = FileHandle.nullDevice
+                    probe.standardError = FileHandle.nullDevice
+                    try probe.run()
+                    probe.waitUntilExit()
+                    if probe.terminationStatus == 0 {
+                        throw NSError(
+                            domain: "JoyConKeys.LaunchAgentRemoval",
+                            code: Int(process.terminationStatus),
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "launchctl could not unload \(Self.launchAgentLabel)"
+                            ])
+                    }
+                }
                 DispatchQueue.main.async {
                     loginError = nil
                     syncFromSystem()

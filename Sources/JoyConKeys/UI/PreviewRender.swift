@@ -18,7 +18,8 @@ enum PreviewRender {
         // request TCC permissions, or start controller discovery just to
         // render documentation/QA screenshots.
         let previewMappings = FileManager.default.temporaryDirectory
-            .appendingPathComponent("JoyConKeysPreview-\(getpid()).json")
+            .appendingPathComponent(
+                "JoyConKeysPreview-\(ProcessInfo.processInfo.processIdentifier).json")
         let store = MappingStore(fileURL: previewMappings)
         let engine = ControllerEngine(
             store: store, startBackend: false, promptForAccessibility: false)

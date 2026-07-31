@@ -21,6 +21,17 @@ APP_BACKUP="$APP_DEST.rollback"
 
 mkdir -p "$HOME/Library/LaunchAgents"
 
+cleanup_staged() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+    rm -rf "$APP_NEW" "$APP_BACKUP"
+    rm -f "$PLIST_NEW" "$PLIST_BACKUP"
+    exit "$exit_code"
+}
+trap cleanup_staged EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Stage next to the destination, then swap — a failed copy must not leave
 # /Applications with no app at all.
 rm -rf "$APP_NEW" "$APP_BACKUP"
@@ -68,9 +79,9 @@ rollback() {
 }
 APP_INSTALLED_NEW=0
 PLIST_INSTALLED_NEW=0
+# Replace the staging-only cleanup now that subsequent commands can mutate
+# the installed app and plist and therefore require full rollback.
 trap rollback EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # Replace the running instance cleanly only after all staged inputs validate.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
