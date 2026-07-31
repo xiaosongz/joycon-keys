@@ -87,8 +87,10 @@ struct SettingsPane: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                     Button("Open Privacy & Security › Input Monitoring") {
-                        NSWorkspace.shared.open(URL(string:
-                            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
+                        if let url = URL(string:
+                            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                            NSWorkspace.shared.open(url)
+                        }
                     }
                     .font(.caption)
                 }

@@ -291,15 +291,18 @@ final class RawHIDBackend: InputBackend {
     /// at `.fallback`, so a dropped or unreadable block only costs some stick
     /// scaling accuracy — the Joy-Con still works.
     private func handleSubcommandReply(_ d: Device, _ data: [UInt8]) {
+        // 0x21 replies arrive for every subcommand (mode-set ack 0x03, etc.),
+        // not just SPI reads — only a reply echoing subcommand 0x10 is ours
+        // to parse, and only that failing to parse is worth a trace.
+        guard data.count > 14, data[14] == 0x10 else { return }
         guard let reply = SPIReadReply.parse(data) else {
-            // Made visible once per device (M2/I-2): if this genuinely was a
-            // subcommand-reply report and we still couldn't parse it, that
-            // silent-failure path needs a trace, not just a dropped read.
+            // Made visible once per device (M2/I-2): a genuine SPI-read reply
+            // we couldn't parse needs a trace, not just a dropped read.
             // (M-2: handleReport already proved reportID == 0x21 before
             // calling in here, so re-checking data.first was redundant.)
             if !d.loggedParseFailure {
                 d.loggedParseFailure = true
-                NSLog("[joycon-keys] raw %@ SPIReadReply.parse returned nil for a 0x21 report", d.name)
+                NSLog("[joycon-keys] raw %@ SPIReadReply.parse returned nil for a 0x21 SPI-read reply", d.name)
             }
             return
         }
