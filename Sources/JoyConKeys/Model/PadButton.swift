@@ -9,6 +9,10 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
     // A combined pair: ZL/ZR arrive as Left/Right Trigger instead.
     case shoulderLeft, shoulderRight
     case triggerLeft, triggerRight
+    // The big rail buttons L / R. Distinct from ZL/ZR since the raw HID
+    // engine (and a combined pair via GameController) can tell them apart;
+    // a single Joy-Con through GameController never fires them.
+    case bumperLeft, bumperRight
     case home          // Joy-Con (R) only
     case capture       // Joy-Con (L) only (GC exposes it as Button Share)
     case menu          // + on (R), − on (L)
@@ -28,6 +32,8 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
         case .shoulderRight: return "SR"
         case .triggerLeft: return "ZL"
         case .triggerRight: return "ZR"
+        case .bumperLeft: return "L"
+        case .bumperRight: return "R"
         case .home: return "Home"
         case .capture: return "Capture"
         // GameController: Button Menu = +, Button Options = −. Which one a
@@ -43,18 +49,24 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
     }
 
     /// Rows shown in the mapping editor for a given side, in display order.
+    /// Only buttons that physically exist on that side appear: SL/SR are on
+    /// both rails, but L/ZL live on the left mini and R/ZR on the right.
     static func editorRows(side: JoyConSide) -> [PadButton] {
-        [
+        var rows: [PadButton] = [
             .buttonX, .buttonB, .buttonY, .buttonA,
             .stickUp, .stickDown, .stickLeft, .stickRight,
             .shoulderLeft, .shoulderRight,
-            // ZL/ZR are the only shoulders a combined pair reports —
-            // they must be rebindable even though a single Joy-Con
-            // never fires them.
-            .triggerLeft, .triggerRight,
-            side == .left ? .capture : .home,
-            .menu, .options,
         ]
+        // + (menu) is on the right mini, − (options) on the left — same
+        // one-side-only rule as the bumpers/triggers. (In GC mode a single
+        // (L)'s − may arrive as Menu — unverified; raw HID is unambiguous.)
+        switch side {
+        case .left: rows += [.bumperLeft, .triggerLeft, .capture, .options]
+        case .right: rows += [.bumperRight, .triggerRight, .home, .menu]
+        case .other: rows += [.bumperLeft, .triggerLeft, .bumperRight, .triggerRight,
+                              .capture, .home, .menu, .options]
+        }
+        return rows
     }
 }
 

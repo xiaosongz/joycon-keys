@@ -92,6 +92,29 @@ don't arrive: the startup line `accessibility trusted: yes/NO` is the only
 visible symptom of a missing permission, because macOS drops synthetic
 events silently.
 
+### Raw HID engine (SL/SR everywhere, no combine/split gesture)
+
+The ⚙ Settings tab has an **Always use raw HID** toggle (off by default).
+When on, the app bypasses Apple's GameController framework and reads both
+Joy-Con Bluetooth HID devices directly via IOKit.
+
+Why it exists: when macOS merges two Joy-Cons into one combined controller,
+the GameController framework stops reporting SL/SR entirely
+([SDL #6095](https://github.com/libsdl-org/SDL/issues/6095)) — and a single
+Joy-Con reports *only* SL/SR. The raw engine sees every button on every
+half in every mode, so SL/SR always work and the Capture+Home combine/split
+gesture becomes unnecessary — dock one half for charging and keep playing
+on the other, no ritual.
+
+The toggle needs **Input Monitoring** permission (System Settings › Privacy
+& Security › Input Monitoring) — separate from the Accessibility grant, and
+keyed to the same code-signing identity caveats below. If the permission is
+missing, the app falls back to the GameController engine and the Settings
+tab shows a red caption with a grant button. Flipping the toggle takes
+effect immediately; no relaunch needed. Stick calibration is read from the
+Joy-Con's own factory/user calibration stored in its SPI flash, so stick
+feel matches the system engine.
+
 ### Re-building without losing the Accessibility grant
 
 macOS keys the permission to the app's code-signing identity. Ad-hoc signing

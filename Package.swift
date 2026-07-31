@@ -13,6 +13,12 @@ let package = Package(
             // bridging this app relies on. Revisit when GC gets Sendable
             // annotations.
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(
+            name: "JoyConKeysTests",
+            dependencies: ["JoyConKeys"],
+            path: "Tests/JoyConKeysTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

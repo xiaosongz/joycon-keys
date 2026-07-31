@@ -1,16 +1,11 @@
 import Combine
 import Foundation
-import GameController
 
-/// Connects to Joy-Con via the GameController framework, fires mapped
-/// actions, and publishes connection + pressed state for the UI.
-///
-/// A single Joy-Con exposes NO extendedGamepad profile on macOS — only
-/// physicalInputProfile with Button A/B/X/Y, Home (R) / Share (L), Menu,
-/// Direction Pad (the stick), and Left/Right Shoulder (= SL/SR). A combined
-/// pair reports ZL/ZR as triggers instead and loses SL/SR (SDL issue #6095).
+/// Facade: owns UI-published state and the shared stick/repeat pipeline;
+/// exactly ONE backend (GameController or raw HID) feeds it at a time, so
+/// backends can never double-fire an action.
 @MainActor
-final class ControllerEngine: ObservableObject {
+final class ControllerEngine: ObservableObject, BackendDelegate {
     struct Connected: Identifiable, Equatable {
         let id: ObjectIdentifier
         let side: JoyConSide
@@ -19,95 +14,71 @@ final class ControllerEngine: ObservableObject {
 
     @Published private(set) var connected: [Connected] = []
     @Published private(set) var pressed: Set<PadButton> = []
+    /// True when the user wants raw HID but Input Monitoring is denied
+    /// (Settings shows the remediation caption).
+    @Published private(set) var rawHIDDenied = false
 
     private let store: MappingStore
     private let repeater = Repeater()
     /// Which dpad currently owns the digital stick direction — so centering
     /// one stick can't cancel a repeat the *other* stick is driving.
     private var activeStick: ObjectIdentifier?
-    private var observers: [NSObjectProtocol] = []
+    private var backend: InputBackend?
+    /// Sticky for this launch: a runtime kIOReturnNotPermitted proves the
+    /// cached IOHIDCheckAccess "granted" is stale, so re-trying raw HID on
+    /// every activation would thrash backends (fail → fallback → retry).
+    /// Cleared only by toggling raw HID off — a real TCC change needs an
+    /// app relaunch anyway.
+    private var rawRuntimeDenied = false
 
     init(store: MappingStore) {
         self.store = store
-        observers.append(NotificationCenter.default.addObserver(
-            forName: .GCControllerDidConnect, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let c = note.object as? GCController else { return }
-            MainActor.assumeIsolated { self?.wire(c) }
-        })
-        observers.append(NotificationCenter.default.addObserver(
-            forName: .GCControllerDidDisconnect, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let c = note.object as? GCController else { return }
-            MainActor.assumeIsolated { self?.unwire(c) }
-        })
-        GCController.shouldMonitorBackgroundEvents = true
-        GCController.startWirelessControllerDiscovery()
-        for c in GCController.controllers() { wire(c) }
+        applyBackendPreference()
     }
 
-    deinit {
-        for token in observers { NotificationCenter.default.removeObserver(token) }
+    /// Reads the useRawHID default and swaps backends if needed. Raw HID
+    /// needs Input Monitoring; when that is denied we stay on GameController
+    /// and surface it via `rawHIDDenied` so Settings can show remediation.
+    /// Cheap to call repeatedly (Settings calls it on every activation) —
+    /// it returns immediately unless the running backend is the wrong one.
+    func applyBackendPreference() {
+        let wantRaw = UserDefaults.standard.bool(forKey: AppDefaults.useRawHIDKey)
+        if !wantRaw { rawRuntimeDenied = false }
+        let canRaw = wantRaw && !rawRuntimeDenied && RawHIDBackend.accessGranted()
+        // Settings calls this on every activation; only actually publish
+        // when the value changes, or @Published fires objectWillChange for
+        // no-op re-sets and floods SwiftUI with invalidations (MINOR-1).
+        let denied = wantRaw && !canRaw
+        if rawHIDDenied != denied { rawHIDDenied = denied }
+        // With no backend yet (first launch) both casts are false, so this
+        // reads as "needs swap" either way.
+        let needsSwap = canRaw ? !(backend is RawHIDBackend) : !(backend is GCBackend)
+        guard needsSwap else { return }
+        backend?.stop()
+        clearLiveState()
+        let next: InputBackend = canRaw ? RawHIDBackend() : GCBackend()
+        backend = next
+        next.start(delegate: self)
+        NSLog("[joycon-keys] input backend: %@", canRaw ? "raw HID" : "GameController")
     }
 
-    static func side(of controller: GCController) -> JoyConSide {
-        let name = controller.vendorName ?? ""
-        if name.contains("(L)") { return .left }
-        if name.contains("(R)") { return .right }
-        return .other
+    private func clearLiveState() {
+        repeater.release()
+        pressed.removeAll()
+        activeStick = nil
+        connected.removeAll()
     }
 
-    private func wire(_ controller: GCController) {
-        // The framework default is already the main queue, but every
-        // MainActor.assumeIsolated below TRAPS if that ever changes — pin it.
-        // Must be set before handlers are configured (GCDevicePhysicalInput).
-        controller.handlerQueue = .main
-        let side = Self.side(of: controller)
-        let entry = Connected(
-            id: ObjectIdentifier(controller), side: side,
-            name: controller.vendorName ?? "Controller")
-        connected.removeAll { $0.id == entry.id }
-        connected.append(entry)
-        NSLog("[joycon-keys] wired: %@ (%@)", entry.name, side.rawValue)
+    // MARK: BackendDelegate
 
-        let p = controller.physicalInputProfile
-        bind(p.buttons[GCInputButtonA], .buttonA)
-        bind(p.buttons[GCInputButtonB], .buttonB)
-        bind(p.buttons[GCInputButtonX], .buttonX)
-        bind(p.buttons[GCInputButtonY], .buttonY)
-        bind(p.buttons[GCInputLeftShoulder], .shoulderLeft)
-        bind(p.buttons[GCInputRightShoulder], .shoulderRight)
-        bind(p.buttons[GCInputLeftTrigger], .triggerLeft)
-        bind(p.buttons[GCInputRightTrigger], .triggerRight)
-        bind(p.buttons[GCInputButtonHome], .home)
-        bind(p.buttons[GCInputButtonShare], .capture)
-        bind(p.buttons[GCInputButtonMenu], .menu)
-        bind(p.buttons[GCInputButtonOptions], .options)
-
-        if side == .other {
-            // Combined "Joy-Con (L/R)": macOS merges both minis into one
-            // controller and we cannot split it, so treat each half as the
-            // SAME mirrored remote instead of a big gamepad. The left
-            // half's arrow buttons arrive as a digital Direction Pad —
-            // mirror them onto the face-button actions by position
-            // (▲=X, ▶=A, ▼=B, ◀=Y), and let both thumbsticks drive the
-            // stick actions (axes are already upright in this mode).
-            if let dpad = p.dpads[GCInputDirectionPad] {
-                bind(dpad.up, .buttonX)
-                bind(dpad.right, .buttonA)
-                bind(dpad.down, .buttonB)
-                bind(dpad.left, .buttonY)
-            }
-        } else {
-            // Single Joy-Con: the Direction Pad IS the analog stick.
-            bindStick(p.dpads[GCInputDirectionPad], side: side)
-        }
-        bindStick(p.dpads[GCInputLeftThumbstick], side: side)
-        bindStick(p.dpads[GCInputRightThumbstick], side: side)
+    func backendConnected(id: ObjectIdentifier, side: JoyConSide, name: String) {
+        connected.removeAll { $0.id == id }
+        connected.append(Connected(id: id, side: side, name: name))
+        NSLog("[joycon-keys] wired: %@ (%@)", name, side.rawValue)
     }
 
-    private func unwire(_ controller: GCController) {
-        connected.removeAll { $0.id == ObjectIdentifier(controller) }
+    func backendDisconnected(id: ObjectIdentifier, name: String) {
+        connected.removeAll { $0.id == id }
         // Only wipe live input state when nothing is left — another
         // still-connected controller may be mid-press or mid-repeat.
         if connected.isEmpty {
@@ -115,49 +86,40 @@ final class ControllerEngine: ObservableObject {
             pressed.removeAll()
             activeStick = nil
         }
-        NSLog("[joycon-keys] disconnected: %@", controller.vendorName ?? "controller")
+        NSLog("[joycon-keys] disconnected: %@", name)
     }
 
-    private let debug = ProcessInfo.processInfo.environment["JOYKEYS_DEBUG"] != nil
-
-    private func bind(_ button: GCControllerButtonInput?, _ id: PadButton) {
-        guard let button else { return }
-        let debug = self.debug
-        button.pressedChangedHandler = { [weak self] element, _, isPressed in
-            guard let self else { return }
-            if debug {
-                NSLog("[debug] %@ -> %@ pressed=%d",
-                      element.localizedName ?? "?", id.rawValue, isPressed ? 1 : 0)
-            }
-            MainActor.assumeIsolated {
-                if isPressed {
-                    self.pressed.insert(id)
-                    KeySynth.perform(self.store.action(for: id))
-                } else {
-                    self.pressed.remove(id)
-                }
-            }
+    func backendButton(_ button: PadButton, pressed isPressed: Bool) {
+        if isPressed {
+            pressed.insert(button)
+            KeySynth.perform(store.action(for: button))
+        } else {
+            pressed.remove(button)
         }
     }
 
-    /// Vertical-grip axis remap. macOS reports single-Joy-Con axes in the
-    /// SIDEWAYS grip frame (rail up, stick left of the face buttons):
-    ///   Joy-Con (R): grip up = reported +x, grip right = reported -y
-    ///   Joy-Con (L): grip up = reported -x, grip right = reported +y
-    /// Anything else (combined pair, Pro Controller) is already upright.
-    private func bindStick(_ dpad: GCControllerDirectionPad?, side: JoyConSide) {
-        guard let dpad else { return }
-        let stick = ObjectIdentifier(dpad)
-        dpad.valueChangedHandler = { [weak self] _, x, y in
-            guard let self else { return }
-            let (up, right): (Float, Float)
-            switch side {
-            case .right: (up, right) = (x, -y)
-            case .left: (up, right) = (-x, y)
-            case .other: (up, right) = (y, x)
-            }
-            MainActor.assumeIsolated { self.handleStick(stick, up: up, right: right) }
-        }
+    func backendStick(_ stick: ObjectIdentifier, up: Float, right: Float) {
+        handleStick(stick, up: up, right: right)
+    }
+
+    /// Runtime permission loss (I-1): the pre-flight IOHIDCheckAccess said
+    /// granted, but an actual device open came back kIOReturnNotPermitted —
+    /// stale TCC state after a rebuild/re-sign is the known repro. This is a
+    /// forced fallback, not a preference re-apply: swap to GCBackend directly
+    /// WITHOUT re-reading useRawHID, so the toggle stays ON and Settings
+    /// shows the red caption. `rawRuntimeDenied` keeps later
+    /// applyBackendPreference() calls from re-trying raw HID this launch
+    /// (the stale-granted check would just fail the same way and thrash);
+    /// recovery is toggle off/on or relaunch after fixing the grant.
+    func backendPermissionDenied() {
+        rawHIDDenied = true
+        rawRuntimeDenied = true
+        backend?.stop()
+        clearLiveState()
+        let next: InputBackend = GCBackend()
+        backend = next
+        next.start(delegate: self)
+        NSLog("[joycon-keys] raw HID permission denied at runtime — falling back to GameController")
     }
 
     /// Stick-to-digital with hysteresis: engage past 0.6, release inside
