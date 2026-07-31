@@ -26,17 +26,19 @@ cp scripts/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp "$(swift build -c release --show-bin-path)/JoyConKeys" "$APP/Contents/MacOS/JoyConKeys"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-    codesign --force --sign - --identifier "$IDENTIFIER" "$APP"
+    codesign --force --options runtime --sign - --identifier "$IDENTIFIER" "$APP"
 else
-    # Surface the real codesign error (expired cert, locked keychain,
-    # ambiguous match…) before degrading — a silent ad-hoc fallback is
-    # exactly what kills a persistent TCC grant.
-    if ! err=$(codesign --force --sign "$SIGN_IDENTITY" --identifier "$IDENTIFIER" "$APP" 2>&1); then
+    # A caller that requests a stable identity is depending on it for TCC and
+    # login-item continuity. Fail closed: deploying an ad-hoc fallback would
+    # replace a working app with one whose permissions are silently orphaned.
+    if ! err=$(codesign --force --options runtime --sign "$SIGN_IDENTITY" \
+        --identifier "$IDENTIFIER" "$APP" 2>&1); then
         echo "warning: codesign with '$SIGN_IDENTITY' failed:" >&2
         echo "$err" >&2
-        echo "warning: falling back to AD-HOC signing — the Accessibility grant will NOT survive this rebuild" >&2
-        codesign --force --sign - --identifier "$IDENTIFIER" "$APP"
+        echo "error: refusing to fall back to ad-hoc signing; no app was deployed" >&2
+        exit 1
     fi
 fi
 
+codesign --verify --deep --strict "$APP"
 echo "built: $APP"

@@ -29,6 +29,21 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            if !engine.accessibilityTrusted {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("Accessibility permission is required to send keys.")
+                    Spacer()
+                    Button("Open Accessibility Settings") {
+                        openAccessibilitySettings()
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.red)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                Divider()
+            }
             if tab == .settings {
                 SettingsPane()
                     .frame(minHeight: 460)
@@ -107,5 +122,12 @@ struct ContentView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    private func openAccessibilitySettings() {
+        guard let url = URL(string:
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 }

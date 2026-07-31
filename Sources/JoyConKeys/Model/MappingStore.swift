@@ -9,6 +9,7 @@ final class MappingStore: ObservableObject {
     @Published var mappings: [PadButton: MappedAction] {
         didSet { save() }
     }
+    private let persistenceURL: URL
 
     static let fileURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -51,8 +52,13 @@ final class MappingStore: ObservableObject {
         .stickRight: .combo(KeyCombo(keyCode: 124, modifiers: [])),
     ]
 
-    init() {
-        if let data = try? Data(contentsOf: Self.fileURL) {
+    convenience init() {
+        self.init(fileURL: MappingStore.fileURL)
+    }
+
+    init(fileURL: URL) {
+        persistenceURL = fileURL
+        if let data = try? Data(contentsOf: fileURL) {
             if let decoded = try? JSONDecoder().decode([String: LenientAction].self, from: data) {
                 var loaded: [PadButton: MappedAction] = [:]
                 for (key, lenient) in decoded {
@@ -65,9 +71,9 @@ final class MappingStore: ObservableObject {
             } else {
                 // Unparseable file: preserve it before save() overwrites —
                 // silently destroying user mappings is worse than defaults.
-                let backup = Self.fileURL.appendingPathExtension("bak")
+                let backup = fileURL.appendingPathExtension("bak")
                 try? FileManager.default.removeItem(at: backup)
-                try? FileManager.default.copyItem(at: Self.fileURL, to: backup)
+                try? FileManager.default.copyItem(at: fileURL, to: backup)
                 NSLog("[joycon-keys] mappings.json unreadable — reset to defaults, original kept at %@", backup.path)
                 mappings = Self.defaults
             }
@@ -95,7 +101,7 @@ final class MappingStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
             let data = try encoder.encode(byKey)
-            try data.write(to: Self.fileURL, options: .atomic)
+            try data.write(to: persistenceURL, options: .atomic)
         } catch {
             NSLog("[joycon-keys] failed to persist mappings: %@", String(describing: error))
         }

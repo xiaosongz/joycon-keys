@@ -1,3 +1,4 @@
+import Darwin
 import ServiceManagement
 import SwiftUI
 
@@ -24,17 +25,32 @@ struct SettingsPane: View {
     @State private var startAtLogin = false
     @State private var loginError: String?
 
-    /// A KeepAlive LaunchAgent (README › Start at login) already owns
+    /// A legacy LaunchAgent (README › Start at login) already owns
     /// startup on this machine. It also makes SMAppService.mainApp report
     /// .enabled (its BTM record covers the app bundle), so the toggle would
     /// both mislead and race a second instance — disable it instead.
-    private var launchAgentInstalled: Bool {
-        FileManager.default.fileExists(
-            atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.xiaosong.joycon-keys.plist")
-    }
+    @State private var launchAgentInstalled = false
 
     var body: some View {
         Form {
+            Section("Permissions") {
+                LabeledContent("Accessibility") {
+                    Text(engine.accessibilityTrusted ? "Granted" : "Required")
+                        .foregroundStyle(engine.accessibilityTrusted ? .green : .red)
+                }
+                if !engine.accessibilityTrusted {
+                    Button("Open Privacy & Security › Accessibility") {
+                        if let url = URL(string:
+                            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Text("JoyConKeys can read the controller without this permission, but macOS drops every synthesized key.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Startup") {
                 // Action lives in the binding's setter — an .onChange
                 // observer would re-fire on the failure-path revert and
@@ -49,10 +65,15 @@ struct SettingsPane: View {
                         .foregroundStyle(.red)
                 }
                 Text(launchAgentInstalled
-                     ? "Startup is managed by the installed LaunchAgent (com.xiaosong.joycon-keys) — remove it with launchctl bootout to use a login item instead."
+                     ? "Startup is managed by the legacy LaunchAgent (com.xiaosong.joycon-keys). Remove it below to use the standard login item instead."
                      : "Registers a standard macOS login item (visible in System Settings › General › Login Items).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if launchAgentInstalled {
+                    Button("Remove Legacy LaunchAgent") {
+                        removeLegacyLaunchAgent()
+                    }
+                }
 
                 Toggle("Start minimized (menu bar only)", isOn: $startMinimized)
                 Text("When off, the mapping editor opens on launch. Applies from the next start.")
@@ -93,6 +114,10 @@ struct SettingsPane: View {
                         }
                     }
                     .font(.caption)
+                } else if let error = engine.rawHIDError {
+                    Text("Raw HID issue: \(error). Reconnect the controller or toggle raw HID off and on to retry.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
                 Text("Reads Joy-Con directly over Bluetooth HID. All four SL/SR buttons work even when macOS combines the pair — no Capture+Home gesture needed.")
                     .font(.caption)
@@ -114,12 +139,15 @@ struct SettingsPane: View {
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification)) { _ in
                 syncFromSystem()
+                engine.refreshAccessibility()
                 engine.applyBackendPreference()
             }
     }
 
     private func syncFromSystem() {
         startAtLogin = SMAppService.mainApp.status == .enabled
+        launchAgentInstalled = FileManager.default.fileExists(
+            atPath: Self.launchAgentPlistURL.path)
     }
 
     private func applyLoginItem(enable: Bool) {
@@ -145,6 +173,58 @@ struct SettingsPane: View {
         }
         // One source of truth for the toggle on both paths.
         syncFromSystem()
+    }
+
+    private static let launchAgentLabel = "com.xiaosong.joycon-keys"
+    private static let launchAgentPlistURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
+
+    private func removeLegacyLaunchAgent() {
+        let plistURL = Self.launchAgentPlistURL
+        let serviceTarget = "gui/\(getuid())/\(Self.launchAgentLabel)"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                // Delete the persistent registration first. bootout may
+                // terminate this process immediately, so doing it first could
+                // otherwise leave the plist behind to relaunch at next login.
+                try FileManager.default.removeItem(at: plistURL)
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                process.arguments = ["bootout", serviceTarget]
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    // bootout also returns nonzero when the job is already
+                    // unloaded. Distinguish that harmless case from a live
+                    // job that actually resisted removal.
+                    let probe = Process()
+                    probe.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                    probe.arguments = ["print", serviceTarget]
+                    probe.standardOutput = FileHandle.nullDevice
+                    probe.standardError = FileHandle.nullDevice
+                    try probe.run()
+                    probe.waitUntilExit()
+                    if probe.terminationStatus == 0 {
+                        throw NSError(
+                            domain: "JoyConKeys.LaunchAgentRemoval",
+                            code: Int(process.terminationStatus),
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "launchctl could not unload \(Self.launchAgentLabel)"
+                            ])
+                    }
+                }
+                DispatchQueue.main.async {
+                    loginError = nil
+                    syncFromSystem()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    loginError = "Couldn't remove legacy LaunchAgent: \(error.localizedDescription)"
+                    syncFromSystem()
+                }
+            }
+        }
     }
 }
 

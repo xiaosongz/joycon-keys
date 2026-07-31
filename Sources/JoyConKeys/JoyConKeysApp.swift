@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import SwiftUI
 
 @main
@@ -14,13 +13,6 @@ struct JoyConKeysApp: App {
         let store = MappingStore()
         _store = StateObject(wrappedValue: store)
         _engine = StateObject(wrappedValue: ControllerEngine(store: store))
-
-        // Prompt once if key synthesis would be silently dropped. Log the
-        // result either way: with KeepAlive a denied grant otherwise looks
-        // identical to a working one (macOS drops synthetic events silently).
-        let trusted = AXIsProcessTrustedWithOptions(
-            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-        NSLog("[joycon-keys] accessibility trusted: %@", trusted ? "yes" : "NO — grant it in System Settings › Privacy & Security › Accessibility")
     }
 
     var body: some Scene {
@@ -53,6 +45,9 @@ private struct MenuContent: View {
             ForEach(engine.connected) { c in
                 Text("\(c.name) connected")
             }
+        }
+        if !engine.accessibilityTrusted {
+            Text("Accessibility permission required")
         }
         Divider()
         Button("Open Mapping Editor…") {

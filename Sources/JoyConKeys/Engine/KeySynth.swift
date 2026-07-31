@@ -12,11 +12,76 @@ import Foundation
 /// - Hotkey listeners are happiest when modifiers arrive as real key events
 ///   pressed in order and released in reverse, like human fingers.
 enum KeySynth {
+    struct RepeatToken: Hashable, Sendable {
+        fileprivate let id: UUID
+    }
+
+    /// Keeps each stick-repeat stream to at most one queued/running synthesis.
+    /// Timer ticks that arrive while that work is pending are coalesced, and a
+    /// released stream is rejected before any queued action starts.
+    final class RepeatCoordinator: @unchecked Sendable {
+        private struct State {
+            var active = true
+            var pending = false
+        }
+
+        private let lock = NSLock()
+        private var states: [UUID: State] = [:]
+
+        func begin() -> RepeatToken {
+            lock.lock()
+            defer { lock.unlock() }
+            let token = RepeatToken(id: UUID())
+            states[token.id] = State()
+            return token
+        }
+
+        func claim(_ token: RepeatToken) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard var state = states[token.id], state.active, !state.pending else { return false }
+            state.pending = true
+            states[token.id] = state
+            return true
+        }
+
+        func shouldExecute(_ token: RepeatToken) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return states[token.id]?.active == true
+        }
+
+        func finish(_ token: RepeatToken) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard var state = states[token.id] else { return }
+            if state.active {
+                state.pending = false
+                states[token.id] = state
+            } else {
+                states.removeValue(forKey: token.id)
+            }
+        }
+
+        func cancel(_ token: RepeatToken) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard var state = states[token.id] else { return }
+            if state.pending {
+                state.active = false
+                states[token.id] = state
+            } else {
+                states.removeValue(forKey: token.id)
+            }
+        }
+    }
+
     /// Synthesis sleeps (up to 200 ms for double-Control) run here, off the
     /// main thread — GameController handlers and the stick repeat timer are
     /// main-queue and must not stall behind a usleep. Serial, so overlapping
     /// presses can't interleave their modifier sequences.
     private static let queue = DispatchQueue(label: "joyconkeys.synth", qos: .userInteractive)
+    private static let repeatCoordinator = RepeatCoordinator()
 
     private static let modifierKeys: [(Modifiers, CGKeyCode)] = [
         (.control, 59), (.option, 58), (.shift, 56), (.command, 55),
@@ -92,12 +157,34 @@ enum KeySynth {
     }
 
     static func perform(_ action: MappedAction) {
+        queue.async { performNow(action) }
+    }
+
+    static func beginRepeat() -> RepeatToken {
+        repeatCoordinator.begin()
+    }
+
+    static func cancelRepeat(_ token: RepeatToken) {
+        repeatCoordinator.cancel(token)
+    }
+
+    static func performRepeat(_ action: MappedAction, token: RepeatToken) {
+        guard repeatCoordinator.claim(token) else { return }
         queue.async {
-            switch action {
-            case .combo(let c): post(c)
-            case .doubleControl: postDoubleControl()
-            case .unassigned: break
+            guard repeatCoordinator.shouldExecute(token) else {
+                repeatCoordinator.finish(token)
+                return
             }
+            performNow(action)
+            repeatCoordinator.finish(token)
+        }
+    }
+
+    private static func performNow(_ action: MappedAction) {
+        switch action {
+        case .combo(let c): post(c)
+        case .doubleControl: postDoubleControl()
+        case .unassigned: break
         }
     }
 }

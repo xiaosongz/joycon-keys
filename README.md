@@ -75,22 +75,27 @@ orphans the previous entry. Sign with a persistent certificate if you
 rebuild often, and run the app from `/Applications` (the toggle refuses a
 build-directory path on purpose).
 
-Alternatively install a LaunchAgent (survives crashes via `KeepAlive` —
-don't combine it with the login item, or two instances will race):
+Alternatively install a LaunchAgent (restarts crashes, but respects
+**Quit JoyConKeys** — don't combine it with the login item, or two instances
+will race):
 
 ```sh
 cp scripts/launchagent.plist ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.xiaosong.joycon-keys.plist
 ```
 
+Remove a legacy LaunchAgent from the app's ⚙ Settings tab before enabling
+the standard login item. The removal stops the LaunchAgent-managed instance;
+open JoyConKeys again normally afterward.
+
 launchd refuses to exec binaries on external volumes — keep the app on the
 boot disk.
 
 The agent logs to `/tmp/joycon-keys.log` (the maintainer's `deploy.sh`
 repoints it to `~/Library/Logs/joycon-keys.log`). Check it first when keys
-don't arrive: the startup line `accessibility trusted: yes/NO` is the only
-visible symptom of a missing permission, because macOS drops synthetic
-events silently.
+don't arrive. The mapping window and menu-bar menu also show when
+Accessibility permission is missing, because macOS otherwise drops
+synthetic events silently.
 
 ### Raw HID engine (SL/SR everywhere, no combine/split gesture)
 
@@ -111,9 +116,10 @@ The toggle needs **Input Monitoring** permission (System Settings › Privacy
 keyed to the same code-signing identity caveats below. If the permission is
 missing, the app falls back to the GameController engine and the Settings
 tab shows a red caption with a grant button. Flipping the toggle takes
-effect immediately; no relaunch needed. Stick calibration is read from the
-Joy-Con's own factory/user calibration stored in its SPI flash, so stick
-feel matches the system engine.
+effect immediately; no relaunch needed. Other raw-HID startup failures are
+also surfaced in Settings instead of leaving the app silently inert. Stick
+calibration is read from the Joy-Con's own factory/user calibration stored
+in its SPI flash, so stick feel matches the system engine.
 
 ### Re-building without losing the Accessibility grant
 

@@ -68,27 +68,28 @@ final class GCBackend: InputBackend {
             name: controller.vendorName ?? "Controller")
 
         let p = controller.physicalInputProfile
-        bind(p.buttons[GCInputButtonA], .buttonA)
-        bind(p.buttons[GCInputButtonB], .buttonB)
-        bind(p.buttons[GCInputButtonX], .buttonX)
-        bind(p.buttons[GCInputButtonY], .buttonY)
+        let device = ObjectIdentifier(controller)
+        bind(p.buttons[GCInputButtonA], .buttonA, device: device)
+        bind(p.buttons[GCInputButtonB], .buttonB, device: device)
+        bind(p.buttons[GCInputButtonX], .buttonX, device: device)
+        bind(p.buttons[GCInputButtonY], .buttonY, device: device)
         // The same GC element means a different physical button per mode:
         // a single Joy-Con reports its rail SL/SR as Left/Right Shoulder,
         // while a combined pair reports the big bumpers L/R there (and
         // never reports SL/SR at all — SDL issue #6095).
         if side == .other {
-            bind(p.buttons[GCInputLeftShoulder], .bumperLeft)
-            bind(p.buttons[GCInputRightShoulder], .bumperRight)
+            bind(p.buttons[GCInputLeftShoulder], .bumperLeft, device: device)
+            bind(p.buttons[GCInputRightShoulder], .bumperRight, device: device)
         } else {
-            bind(p.buttons[GCInputLeftShoulder], .shoulderLeft)
-            bind(p.buttons[GCInputRightShoulder], .shoulderRight)
+            bind(p.buttons[GCInputLeftShoulder], .shoulderLeft, device: device)
+            bind(p.buttons[GCInputRightShoulder], .shoulderRight, device: device)
         }
-        bind(p.buttons[GCInputLeftTrigger], .triggerLeft)
-        bind(p.buttons[GCInputRightTrigger], .triggerRight)
-        bind(p.buttons[GCInputButtonHome], .home)
-        bind(p.buttons[GCInputButtonShare], .capture)
-        bind(p.buttons[GCInputButtonMenu], .menu)
-        bind(p.buttons[GCInputButtonOptions], .options)
+        bind(p.buttons[GCInputLeftTrigger], .triggerLeft, device: device)
+        bind(p.buttons[GCInputRightTrigger], .triggerRight, device: device)
+        bind(p.buttons[GCInputButtonHome], .home, device: device)
+        bind(p.buttons[GCInputButtonShare], .capture, device: device)
+        bind(p.buttons[GCInputButtonMenu], .menu, device: device)
+        bind(p.buttons[GCInputButtonOptions], .options, device: device)
 
         if side == .other {
             // Combined "Joy-Con (L/R)": macOS merges both minis into one
@@ -99,17 +100,17 @@ final class GCBackend: InputBackend {
             // (▲=X, ▶=A, ▼=B, ◀=Y), and let both thumbsticks drive the
             // stick actions (axes are already upright in this mode).
             if let dpad = p.dpads[GCInputDirectionPad] {
-                bind(dpad.up, .buttonX)
-                bind(dpad.right, .buttonA)
-                bind(dpad.down, .buttonB)
-                bind(dpad.left, .buttonY)
+                bind(dpad.up, .buttonX, device: device)
+                bind(dpad.right, .buttonA, device: device)
+                bind(dpad.down, .buttonB, device: device)
+                bind(dpad.left, .buttonY, device: device)
             }
         } else {
             // Single Joy-Con: the Direction Pad IS the analog stick.
-            bindStick(p.dpads[GCInputDirectionPad], side: side)
+            bindStick(p.dpads[GCInputDirectionPad], side: side, device: device)
         }
-        bindStick(p.dpads[GCInputLeftThumbstick], side: side)
-        bindStick(p.dpads[GCInputRightThumbstick], side: side)
+        bindStick(p.dpads[GCInputLeftThumbstick], side: side, device: device)
+        bindStick(p.dpads[GCInputRightThumbstick], side: side, device: device)
     }
 
     private func unwire(_ controller: GCController) {
@@ -120,7 +121,7 @@ final class GCBackend: InputBackend {
 
     private let debug = ProcessInfo.processInfo.environment["JOYKEYS_DEBUG"] != nil
 
-    private func bind(_ button: GCControllerButtonInput?, _ id: PadButton) {
+    private func bind(_ button: GCControllerButtonInput?, _ id: PadButton, device: ObjectIdentifier) {
         guard let button else { return }
         let debug = self.debug
         button.pressedChangedHandler = { [weak self] element, _, isPressed in
@@ -130,7 +131,7 @@ final class GCBackend: InputBackend {
                       element.localizedName ?? "?", id.rawValue, isPressed ? 1 : 0)
             }
             MainActor.assumeIsolated {
-                self.delegate?.backendButton(id, pressed: isPressed)
+                self.delegate?.backendButton(device: device, id, pressed: isPressed)
             }
         }
     }
@@ -140,7 +141,9 @@ final class GCBackend: InputBackend {
     ///   Joy-Con (R): grip up = reported +x, grip right = reported -y
     ///   Joy-Con (L): grip up = reported -x, grip right = reported +y
     /// Anything else (combined pair, Pro Controller) is already upright.
-    private func bindStick(_ dpad: GCControllerDirectionPad?, side: JoyConSide) {
+    private func bindStick(
+        _ dpad: GCControllerDirectionPad?, side: JoyConSide, device: ObjectIdentifier
+    ) {
         guard let dpad else { return }
         let stick = ObjectIdentifier(dpad)
         dpad.valueChangedHandler = { [weak self] _, x, y in
@@ -151,7 +154,9 @@ final class GCBackend: InputBackend {
             case .left: (up, right) = (-x, y)
             case .other: (up, right) = (y, x)
             }
-            MainActor.assumeIsolated { self.delegate?.backendStick(stick, up: up, right: right) }
+            MainActor.assumeIsolated {
+                self.delegate?.backendStick(device: device, stick: stick, up: up, right: right)
+            }
         }
     }
 }
