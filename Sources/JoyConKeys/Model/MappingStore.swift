@@ -37,6 +37,10 @@ final class MappingStore: ObservableObject {
         .shoulderRight: .combo(KeyCombo(keyCode: 2, modifiers: [.control, .option, .command])), // SR = ⌃⌥⌘D
         .triggerLeft: .doubleControl,
         .triggerRight: .combo(KeyCombo(keyCode: 2, modifiers: [.control, .option, .command])),
+        // The big bumpers default to their trigger neighbors' actions, so a
+        // combined pair behaves the same as before L/R became distinct.
+        .bumperLeft: .doubleControl,
+        .bumperRight: .combo(KeyCombo(keyCode: 2, modifiers: [.control, .option, .command])),
         .home: .doubleControl,
         .capture: .doubleControl,
         .menu: .combo(KeyCombo(keyCode: 48, modifiers: [.shift])),       // Shift+Tab

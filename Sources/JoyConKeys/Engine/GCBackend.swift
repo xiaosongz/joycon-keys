@@ -72,8 +72,17 @@ final class GCBackend: InputBackend {
         bind(p.buttons[GCInputButtonB], .buttonB)
         bind(p.buttons[GCInputButtonX], .buttonX)
         bind(p.buttons[GCInputButtonY], .buttonY)
-        bind(p.buttons[GCInputLeftShoulder], .shoulderLeft)
-        bind(p.buttons[GCInputRightShoulder], .shoulderRight)
+        // The same GC element means a different physical button per mode:
+        // a single Joy-Con reports its rail SL/SR as Left/Right Shoulder,
+        // while a combined pair reports the big bumpers L/R there (and
+        // never reports SL/SR at all — SDL issue #6095).
+        if side == .other {
+            bind(p.buttons[GCInputLeftShoulder], .bumperLeft)
+            bind(p.buttons[GCInputRightShoulder], .bumperRight)
+        } else {
+            bind(p.buttons[GCInputLeftShoulder], .shoulderLeft)
+            bind(p.buttons[GCInputRightShoulder], .shoulderRight)
+        }
         bind(p.buttons[GCInputLeftTrigger], .triggerLeft)
         bind(p.buttons[GCInputRightTrigger], .triggerRight)
         bind(p.buttons[GCInputButtonHome], .home)

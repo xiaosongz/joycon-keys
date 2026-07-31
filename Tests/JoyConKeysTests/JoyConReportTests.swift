@@ -24,9 +24,9 @@ final class JoyConReportTests: XCTestCase {
     }
 
     func testRightRailAndTriggers() {
-        // SR=0x10 SL=0x20 R=0x40 ZR=0x80 — R and ZR both fold into .triggerRight
+        // SR=0x10 SL=0x20 R=0x40 ZR=0x80 — R and ZR are distinct actions
         let r = JoyConReport.parseStandard(report(btn3: 0xF0), side: .right)!
-        XCTAssertEqual(r.pressed, [.shoulderRight, .shoulderLeft, .triggerRight])
+        XCTAssertEqual(r.pressed, [.shoulderRight, .shoulderLeft, .bumperRight, .triggerRight])
     }
 
     func testLeftArrowsMirrorToFaceActions() {
@@ -36,9 +36,9 @@ final class JoyConReportTests: XCTestCase {
     }
 
     func testLeftRailAndTriggers() {
-        // SR(L)=0x10 SL(L)=0x20 L=0x40 ZL=0x80 — L and ZL fold into .triggerLeft
+        // SR(L)=0x10 SL(L)=0x20 L=0x40 ZL=0x80 — L and ZL are distinct actions
         let r = JoyConReport.parseStandard(report(btn5: 0xF0), side: .left)!
-        XCTAssertEqual(r.pressed, [.shoulderRight, .shoulderLeft, .triggerLeft])
+        XCTAssertEqual(r.pressed, [.shoulderRight, .shoulderLeft, .bumperLeft, .triggerLeft])
     }
 
     func testSharedButtons() {

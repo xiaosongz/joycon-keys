@@ -27,9 +27,8 @@ struct JoyConReport: Equatable {
         if b3 & 0x08 != 0 { pressed.insert(.buttonA) }
         if b3 & 0x10 != 0 { pressed.insert(.shoulderRight) }  // SR(R)
         if b3 & 0x20 != 0 { pressed.insert(.shoulderLeft) }   // SL(R)
-        // Large rail R and trigger ZR fold into the same action row — R has
-        // no PadButton identity of its own (spec §RawHIDBackend).
-        if b3 & 0xC0 != 0 { pressed.insert(.triggerRight) }
+        if b3 & 0x40 != 0 { pressed.insert(.bumperRight) }    // R
+        if b3 & 0x80 != 0 { pressed.insert(.triggerRight) }   // ZR
 
         let b4 = bytes[4]  // shared
         if b4 & 0x01 != 0 { pressed.insert(.options) }  // −
@@ -45,7 +44,8 @@ struct JoyConReport: Equatable {
         if b5 & 0x08 != 0 { pressed.insert(.buttonY) }  // ◀
         if b5 & 0x10 != 0 { pressed.insert(.shoulderRight) }  // SR(L)
         if b5 & 0x20 != 0 { pressed.insert(.shoulderLeft) }   // SL(L)
-        if b5 & 0xC0 != 0 { pressed.insert(.triggerLeft) }    // L / ZL
+        if b5 & 0x40 != 0 { pressed.insert(.bumperLeft) }     // L
+        if b5 & 0x80 != 0 { pressed.insert(.triggerLeft) }    // ZL
 
         let s = side == .left ? Array(bytes[6...8]) : Array(bytes[9...11])
         let stick = RawStick(
