@@ -223,6 +223,12 @@ final class RawHIDBackend: InputBackend {
         // buffer-pointer matching needed with manager-level registration.
         guard let d = devices[device] else { return }
 
+        if debug, reportID != 0x30 {
+            let n = min(length, 36)
+            let dump = UnsafeBufferPointer(start: bytes, count: n)
+                .map { String(format: "%02X", $0) }.joined(separator: " ")
+            NSLog("[debug] raw %@ report 0x%02X len=%d bytes: %@", d.name, reportID, length, dump)
+        }
         if reportID == 0x21 {
             let data = Array(UnsafeBufferPointer(start: bytes, count: length))
             handleSubcommandReply(d, data)
@@ -282,6 +288,10 @@ final class RawHIDBackend: InputBackend {
             let moved = d.lastStick.map { abs($0.0 - x) > 0.01 || abs($0.1 - y) > 0.01 } ?? true
             if moved {
                 d.lastStick = (x, y)
+                if debug {
+                    NSLog("[debug] raw %@ stick raw=(%d,%d) norm=(%.2f,%.2f)",
+                          d.name, stick.x, stick.y, x, y)
+                }
                 let id = ObjectIdentifier(d.device)
                 // Raw axes arrive in the upright vertical-grip frame directly:
                 // +y up, +x right. The GC path's per-side sideways remap
@@ -359,7 +369,11 @@ final class RawHIDBackend: InputBackend {
         d.calTimer = nil
         guard let cal = StickCalibration.decode(spi: spi, side: d.side) else { return }
         d.calibration = cal
-        if debug { NSLog("[debug] raw %@ %@ stick calibration loaded", d.name, kind) }
+        if debug {
+            NSLog("[debug] raw %@ %@ cal center=(%d,%d) plus=(%d,%d) minus=(%d,%d)",
+                  d.name, kind, cal.centerX, cal.centerY,
+                  cal.rangeXPlus, cal.rangeYPlus, cal.rangeXMinus, cal.rangeYMinus)
+        }
     }
 
     // MARK: subcommands (HID queue)
@@ -451,15 +465,26 @@ final class RawHIDBackend: InputBackend {
 
     @discardableResult
     private func sendSubcommand(_ d: Device, _ subcommand: UInt8, _ args: [UInt8]) -> IOReturn {
-        var packet: [UInt8] = [d.packetCounter]
+        // The buffer MUST carry the 0x01 report ID as byte 0 — macOS sends it
+        // verbatim, never prepending the reportID parameter (hidapi's mac
+        // backend passes data[0]=ID the same way; SDL/BetterJoy depend on it).
+        // The spike's contrary "verified live" finding was a false positive:
+        // without the ID byte the wire packet shifts one early, the device
+        // reads the packet counter as the report ID (valid only when it
+        // happens to equal 0x01) and the first ARGUMENT as the subcommand —
+        // observed on hardware as ack `80 <addr-low> 03`, the documented
+        // do-nothing reply to an unused subcommand. The 0x30 stream that
+        // "confirmed" the spike was macOS's own GameController driver setting
+        // the mode concurrently.
+        var packet: [UInt8] = [0x01, d.packetCounter]
         d.packetCounter = (d.packetCounter + 1) & 0x0F
         packet += [0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40]  // neutral rumble
         packet += [subcommand] + args
-        // Report ID 0x01 goes in the reportID parameter, NOT the buffer
-        // (verified live: 0x21 ack + continuous 0x30 stream at 60 Hz).
         let r = IOHIDDeviceSetReport(d.device, kIOHIDReportTypeOutput, 0x01, packet, packet.count)
         if r != kIOReturnSuccess {
             NSLog("[joycon-keys] raw subcommand 0x%02X failed 0x%X", subcommand, r)
+        } else if debug {
+            NSLog("[debug] raw %@ sent subcommand 0x%02X", d.name, subcommand)
         }
         return r
     }
