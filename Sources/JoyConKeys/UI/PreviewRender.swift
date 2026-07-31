@@ -14,8 +14,14 @@ enum PreviewRender {
         }
         guard let i = args.firstIndex(of: "--render-preview"), args.count > i + 1 else { return }
         let base = args[i + 1]
-        let store = MappingStore()
-        let engine = ControllerEngine(store: store)
+        // Preview mode must remain hermetic: do not touch the user's mappings,
+        // request TCC permissions, or start controller discovery just to
+        // render documentation/QA screenshots.
+        let previewMappings = FileManager.default.temporaryDirectory
+            .appendingPathComponent("JoyConKeysPreview-\(getpid()).json")
+        let store = MappingStore(fileURL: previewMappings)
+        let engine = ControllerEngine(
+            store: store, startBackend: false, promptForAccessibility: false)
         let recorder = ComboRecorder()
 
         let window = ContentView()
@@ -38,6 +44,7 @@ enum PreviewRender {
 
         save(window, to: base + "-window.png")
         save(pair, to: base + "-pair.png")
+        try? FileManager.default.removeItem(at: previewMappings)
         exit(0)
     }
 

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Run unit tests
+        run: swift test
+
+      - name: Validate scripts and property lists
+        run: |
+          zsh -n deploy.sh scripts/build-app.sh scripts/make-icon.sh
+          plutil -lint scripts/Info.plist scripts/launchagent.plist
+
+      - name: Build hardened app bundle
+        run: scripts/build-app.sh
+
+      - name: Verify signature and hardened runtime
+        run: |
+          codesign --verify --deep --strict dist/JoyConKeys.app
+          codesign -dvv dist/JoyConKeys.app 2>&1 | grep -E 'flags=.*runtime'

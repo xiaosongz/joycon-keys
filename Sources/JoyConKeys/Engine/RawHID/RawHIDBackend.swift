@@ -1,6 +1,19 @@
 import Foundation
 import IOKit.hid
 
+struct AttemptBudget: Equatable {
+    let limit: Int
+    private(set) var attempts = 0
+
+    var exhausted: Bool { attempts >= limit }
+
+    mutating func take() -> Bool {
+        guard !exhausted else { return false }
+        attempts += 1
+        return true
+    }
+}
+
 /// Reads Joy-Con directly over Bluetooth HID, bypassing the GameController
 /// framework's pair-merge — all four SL/SR rail buttons work in every mode.
 /// HID callbacks land on a background queue; only translated state changes
@@ -42,6 +55,8 @@ final class RawHIDBackend: InputBackend {
         /// Polls the 0x03 0x30 mode-set subcommand until the first 0x30
         /// report proves the Joy-Con actually switched modes (see attach()).
         var modeSetTimer: DispatchSourceTimer?
+        var modeSetBudget = AttemptBudget(limit: 5)
+        var ready = false
         /// Last normalized stick value pushed to the delegate — 0x30 streams
         /// at 60 Hz/device, so a resting stick must not re-notify every
         /// report (see handleReport).
@@ -114,14 +129,26 @@ final class RawHIDBackend: InputBackend {
                 .handleReport(device: dev, reportID: reportID, bytes: report, length: length)
         }, ctx)
         IOHIDManagerSetDispatchQueue(m, queue)
-        IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone))
+        let open = IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard open == kIOReturnSuccess else {
+            manager = nil
+            self.delegate = nil
+            let reason = String(format: "IOHIDManagerOpen failed (0x%X)", open)
+            if open == kIOReturnNotPermitted {
+                delegate.backendPermissionDenied()
+            } else {
+                delegate.backendUnavailable(reason: reason)
+            }
+            return
+        }
         IOHIDManagerActivate(m)
     }
 
     @MainActor func stop() {
-        guard let m = manager else { return }
+        let m = manager
         manager = nil
         delegate = nil
+        guard let m else { return }
         // IOHIDManagerCancel is asynchronous; IOKit guarantees the cancel
         // handler runs on `queue` only after all in-flight events have been
         // delivered. Tearing down device state (timers, closing devices)
@@ -174,6 +201,9 @@ final class RawHIDBackend: InputBackend {
             if open == kIOReturnNotPermitted, !permissionDeniedNotified {
                 permissionDeniedNotified = true
                 notifyMain { $0.backendPermissionDenied() }
+            } else if open != kIOReturnNotPermitted {
+                let reason = String(format: "device open failed (0x%X)", open)
+                notifyMain { $0.backendDeviceFailed(name: name, reason: reason) }
             }
             return
         }
@@ -191,29 +221,30 @@ final class RawHIDBackend: InputBackend {
         // sitting idle never triggers a retry that way. Instead, poll the
         // subcommand on a repeating timer until a 0x30 report actually
         // proves the switch landed (see handleReport), then stop polling.
-        sendSubcommand(d, 0x03, [0x30])
+        sendModeSet(d)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2.5, repeating: 2.5)
         timer.setEventHandler { [weak self] in
             guard let self, let d = self.devices[dev] else { return }
-            self.sendSubcommand(d, 0x03, [0x30])
+            self.sendModeSet(d)
         }
         d.modeSetTimer = timer
         timer.resume()
-
-        notifyMain { $0.backendConnected(id: ObjectIdentifier(dev), side: side, name: name) }
     }
 
     private func detach(_ dev: IOHIDDevice) {
         guard let d = devices.removeValue(forKey: dev) else { return }
+        let device = ObjectIdentifier(dev)
         d.modeSetTimer?.cancel()
         d.modeSetTimer = nil
         d.calTimer?.cancel()
         d.calTimer = nil
         IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
-        for b in d.previous { notifyMain { $0.backendButton(b, pressed: false) } }
+        for b in d.previous { notifyMain { $0.backendButton(device: device, b, pressed: false) } }
         d.previous = []
-        notifyMain { $0.backendDisconnected(id: ObjectIdentifier(dev), name: d.name) }
+        if d.ready {
+            notifyMain { $0.backendDisconnected(id: device, name: d.name) }
+        }
     }
 
     // MARK: reports (HID queue)
@@ -238,22 +269,6 @@ final class RawHIDBackend: InputBackend {
         // mode-set subcommand lands; nothing to parse from them.
         guard reportID == 0x30 else { return }
 
-        // Mode set confirmed — stop polling for this device.
-        if let timer = d.modeSetTimer {
-            timer.cancel()
-            d.modeSetTimer = nil
-        }
-        // The Joy-Con only answers SPI reads once it is actually in 0x30
-        // mode, and the mode-set itself may take several retries to land —
-        // so calibration is requested off the first 0x30 report rather than
-        // from attach(). A separate flag (not `modeSetTimer == nil`) gates
-        // it: a report arriving before attach() assigned the timer would
-        // otherwise skip calibration for the life of the connection.
-        if d.calStage == .idle {
-            d.calStage = .factory
-            requestCalibration(d)
-        }
-
         let data = Array(UnsafeBufferPointer(start: bytes, count: length))
         guard let parsed = JoyConReport.parseStandard(data, side: d.side) else {
             // Symmetric with the SPIReadReply.parse failure log below (M-2):
@@ -269,6 +284,29 @@ final class RawHIDBackend: InputBackend {
             return
         }
 
+        // Mode set confirmed — stop polling for this device.
+        if let timer = d.modeSetTimer {
+            timer.cancel()
+            d.modeSetTimer = nil
+        }
+        if !d.ready {
+            d.ready = true
+            notifyMain {
+                $0.backendConnected(
+                    id: ObjectIdentifier(d.device), side: d.side, name: d.name)
+            }
+        }
+        // The Joy-Con only answers SPI reads once it is actually in 0x30
+        // mode, and the mode-set itself may take several retries to land —
+        // so calibration is requested off the first 0x30 report rather than
+        // from attach(). A separate flag (not `modeSetTimer == nil`) gates
+        // it: a report arriving before attach() assigned the timer would
+        // otherwise skip calibration for the life of the connection.
+        if d.calStage == .idle {
+            d.calStage = .factory
+            requestCalibration(d)
+        }
+
         if debug, parsed.pressed != d.previous {
             NSLog("[debug] raw %@ pressed=%@", d.name,
                   parsed.pressed.map(\.rawValue).sorted().joined(separator: ","))
@@ -277,8 +315,9 @@ final class RawHIDBackend: InputBackend {
         let went = parsed.pressed.subtracting(d.previous)
         let released = d.previous.subtracting(parsed.pressed)
         d.previous = parsed.pressed
-        for b in went { notifyMain { $0.backendButton(b, pressed: true) } }
-        for b in released { notifyMain { $0.backendButton(b, pressed: false) } }
+        let deviceID = ObjectIdentifier(d.device)
+        for b in went { notifyMain { $0.backendButton(device: deviceID, b, pressed: true) } }
+        for b in released { notifyMain { $0.backendButton(device: deviceID, b, pressed: false) } }
 
         if let stick = parsed.stick {
             let (x, y) = d.calibration.normalize(stick)
@@ -301,7 +340,7 @@ final class RawHIDBackend: InputBackend {
                 // rotation after all, the fix must be PER-SIDE, mirroring
                 // GCBackend's convention (.right → (x, -y), .left → (-x, y)),
                 // never a global axis swap.
-                notifyMain { $0.backendStick(id, up: y, right: x) }
+                notifyMain { $0.backendStick(device: id, stick: id, up: y, right: x) }
             }
         }
     }
@@ -377,6 +416,28 @@ final class RawHIDBackend: InputBackend {
     }
 
     // MARK: subcommands (HID queue)
+
+    private func sendModeSet(_ d: Device) {
+        guard d.modeSetBudget.take() else {
+            failInitialization(d, reason: "timed out entering full-report mode")
+            return
+        }
+        let result = sendSubcommand(d, 0x03, [0x30])
+        if result != kIOReturnSuccess, d.modeSetBudget.exhausted {
+            failInitialization(
+                d, reason: String(format: "full-report mode failed (0x%X)", result))
+        }
+    }
+
+    private func failInitialization(_ d: Device, reason: String) {
+        guard devices.removeValue(forKey: d.device) != nil else { return }
+        d.modeSetTimer?.cancel()
+        d.modeSetTimer = nil
+        d.calTimer?.cancel()
+        d.calTimer = nil
+        IOHIDDeviceClose(d.device, IOOptionBits(kIOHIDOptionsTypeNone))
+        notifyMain { $0.backendDeviceFailed(name: d.name, reason: reason) }
+    }
 
     /// Factory stick calibration sits at 0x603D (left) / 0x6046 (right), 9
     /// bytes in the layout StickCalibration.decode expects.
