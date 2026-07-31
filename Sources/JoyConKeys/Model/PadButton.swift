@@ -57,12 +57,15 @@ enum PadButton: String, Codable, CaseIterable, Identifiable {
             .stickUp, .stickDown, .stickLeft, .stickRight,
             .shoulderLeft, .shoulderRight,
         ]
+        // + (menu) is on the right mini, − (options) on the left — same
+        // one-side-only rule as the bumpers/triggers. (In GC mode a single
+        // (L)'s − may arrive as Menu — unverified; raw HID is unambiguous.)
         switch side {
-        case .left: rows += [.bumperLeft, .triggerLeft]
-        case .right: rows += [.bumperRight, .triggerRight]
-        case .other: rows += [.bumperLeft, .triggerLeft, .bumperRight, .triggerRight]
+        case .left: rows += [.bumperLeft, .triggerLeft, .capture, .options]
+        case .right: rows += [.bumperRight, .triggerRight, .home, .menu]
+        case .other: rows += [.bumperLeft, .triggerLeft, .bumperRight, .triggerRight,
+                              .capture, .home, .menu, .options]
         }
-        rows += [side == .left ? .capture : .home, .menu, .options]
         return rows
     }
 }
