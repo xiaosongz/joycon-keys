@@ -2,8 +2,11 @@ import Foundation
 
 /// Per-axis stick calibration from the Joy-Con's SPI flash. Factory data
 /// lives at 0x603D (left) / 0x6046 (right), 9 bytes of three packed 12-bit
-/// pairs; user calibration (0x8012 / 0x801D, magic 0xB2A1 two bytes before)
-/// uses the same encoding and wins when present.
+/// pairs; the user block uses the same 9-byte encoding and wins when
+/// present. NOTE: RawHIDBackend reads the user block as ONE 11-byte SPI
+/// read starting at 0x8010 (left) / 0x801B (right) — the 2-byte 0xB2A1
+/// write-magic followed by the 9 calibration bytes (so the cal data itself
+/// sits at 0x8012 / 0x801D). `decode` receives only the 9 cal bytes.
 struct StickCalibration: Equatable {
     var centerX: Int
     var centerY: Int
