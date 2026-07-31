@@ -18,7 +18,6 @@ final class RawHIDBackend: InputBackend {
         let device: IOHIDDevice
         let side: JoyConSide
         let name: String
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 362)
         var previous: Set<PadButton> = []
         var calibration = StickCalibration.fallback
         /// How far the SPI calibration handshake has got. The two reads are
@@ -50,7 +49,6 @@ final class RawHIDBackend: InputBackend {
         init(_ d: IOHIDDevice, side: JoyConSide, name: String) {
             device = d; self.side = side; self.name = name
         }
-        deinit { buffer.deallocate() }
     }
 
     private weak var delegate: BackendDelegate?
@@ -101,6 +99,20 @@ final class RawHIDBackend: InputBackend {
         IOHIDManagerRegisterDeviceRemovalCallback(m, { ctx, _, _, dev in
             Unmanaged<RawHIDBackend>.fromOpaque(ctx!).takeUnretainedValue().detach(dev)
         }, ctx)
+        // Report callback MUST be registered at the MANAGER level, before
+        // activation. The header is explicit: "If a dispatch queue is set,
+        // this call must occur before activation" — and IOHIDManagerActivate
+        // activates each matched device BEFORE invoking our matching
+        // callback, so the per-device IOHIDDeviceRegisterInputReportCallback
+        // variant traps (EXC_BREAKPOINT in IOKit) when called from attach().
+        // Verified by crash JoyConKeys-2026-07-30-203752. The manager owns
+        // the report buffers; `sender` identifies the source device.
+        IOHIDManagerRegisterInputReportCallback(m, { ctx, _, sender, _, reportID, report, length in
+            guard let ctx, let sender else { return }
+            let dev = Unmanaged<IOHIDDevice>.fromOpaque(sender).takeUnretainedValue()
+            Unmanaged<RawHIDBackend>.fromOpaque(ctx).takeUnretainedValue()
+                .handleReport(device: dev, reportID: reportID, bytes: report, length: length)
+        }, ctx)
         IOHIDManagerSetDispatchQueue(m, queue)
         IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone))
         IOHIDManagerActivate(m)
@@ -112,10 +124,11 @@ final class RawHIDBackend: InputBackend {
         delegate = nil
         // IOHIDManagerCancel is asynchronous; IOKit guarantees the cancel
         // handler runs on `queue` only after all in-flight events have been
-        // delivered. Tearing down device state (unregistering the report
-        // callback, closing the device, releasing the Device/its buffer)
+        // delivered. Tearing down device state (timers, closing devices)
         // from IN the handler — rather than a queue.async racing the cancel
-        // — is what prevents IOKit from writing into a freed report buffer.
+        // — keeps every Device touch on `queue` and ordered after the last
+        // report delivery. Report buffers are manager-owned (manager-level
+        // callback registration), so no buffer lifetime to manage here.
         // The `[self]` capture plus `_ = m` below keep both this backend and
         // the manager alive until IOKit invokes the handler and then
         // releases it itself, breaking the cycle without a `weak self`.
@@ -125,7 +138,6 @@ final class RawHIDBackend: InputBackend {
                 d.modeSetTimer = nil
                 d.calTimer?.cancel()
                 d.calTimer = nil
-                IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
                 IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
             }
             devices.removeAll()
@@ -167,11 +179,10 @@ final class RawHIDBackend: InputBackend {
         }
         let d = Device(dev, side: side, name: name)
         devices[dev] = d
-        let ctx = Unmanaged.passUnretained(self).toOpaque()
-        IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, { ctx, _, _, _, reportID, report, length in
-            Unmanaged<RawHIDBackend>.fromOpaque(ctx!).takeUnretainedValue()
-                .handleReport(reportID: reportID, bytes: report, length: length)
-        }, ctx)
+        // Report delivery is registered ONCE at the manager level in start()
+        // — registering per-device here would trap: by the time this matching
+        // callback runs, IOHIDManagerActivate has already activated the
+        // device, and per-device registration must precede activation.
 
         // Hardware spike finding: the 0x03 0x30 mode-set subcommand is
         // silently ignored if sent immediately after IOHIDDeviceOpen — the
@@ -199,7 +210,6 @@ final class RawHIDBackend: InputBackend {
         d.modeSetTimer = nil
         d.calTimer?.cancel()
         d.calTimer = nil
-        IOHIDDeviceRegisterInputReportCallback(dev, d.buffer, 362, nil, nil)
         IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
         for b in d.previous { notifyMain { $0.backendButton(b, pressed: false) } }
         d.previous = []
@@ -208,10 +218,10 @@ final class RawHIDBackend: InputBackend {
 
     // MARK: reports (HID queue)
 
-    private func handleReport(reportID: UInt32, bytes: UnsafeMutablePointer<UInt8>, length: CFIndex) {
-        // Identify source device by scanning our table for the buffer —
-        // callback context is self, the report pointer IS the device buffer.
-        guard let d = devices.values.first(where: { $0.buffer == bytes }) else { return }
+    private func handleReport(device: IOHIDDevice, reportID: UInt32, bytes: UnsafeMutablePointer<UInt8>, length: CFIndex) {
+        // Source device comes straight from the callback's `sender` — no
+        // buffer-pointer matching needed with manager-level registration.
+        guard let d = devices[device] else { return }
 
         if reportID == 0x21 {
             let data = Array(UnsafeBufferPointer(start: bytes, count: length))
